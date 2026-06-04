@@ -29,14 +29,13 @@ Add the package to your Flutter desktop app:
 
 ```yaml
 dependencies:
-  system_audio_meter:
-    path: ../system_audio_meter
+  system_audio_meter: ^0.1.0
 ```
 
-Then run:
+Or install it directly from the command line:
 
 ```bash
-flutter pub get
+flutter pub add system_audio_meter
 ```
 
 ## Quick start
