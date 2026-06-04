@@ -11,8 +11,8 @@ void main() {
   setUp(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
-          return '42';
-        });
+      return '42';
+    });
   });
 
   tearDown(() {
@@ -23,8 +23,8 @@ void main() {
   test('isRunning defaults to false when the platform returns null', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
-          return null;
-        });
+      return null;
+    });
 
     expect(await platform.isRunning, isFalse);
   });

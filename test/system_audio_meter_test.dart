@@ -14,15 +14,16 @@ class MockSystemAudioMeterPlatform
 
   @override
   Future<AudioOutputDevice?> getCurrentOutputDevice() => Future.value(
-    const AudioOutputDevice(id: 'default', name: 'Default', isDefault: true),
-  );
+        const AudioOutputDevice(
+            id: 'default', name: 'Default', isDefault: true),
+      );
 
   @override
   Future<List<AudioOutputDevice>> getOutputDevices() => Future.value(
-    const <AudioOutputDevice>[
-      AudioOutputDevice(id: 'default', name: 'Default', isDefault: true),
-    ],
-  );
+        const <AudioOutputDevice>[
+          AudioOutputDevice(id: 'default', name: 'Default', isDefault: true),
+        ],
+      );
 
   @override
   Future<bool> get isRunning => Future.value(true);

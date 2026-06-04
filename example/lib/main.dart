@@ -112,7 +112,9 @@ class _MeterHomePageState extends State<MeterHomePage> {
           _rightPeak = levels.rightPeak;
           _currentDevice = AudioOutputDevice(
             id: levels.outputDeviceId ?? _currentDevice?.id ?? '',
-            name: levels.outputDeviceName ?? _currentDevice?.name ?? 'Default output',
+            name: levels.outputDeviceName ??
+                _currentDevice?.name ??
+                'Default output',
             isDefault: _currentDevice?.isDefault ?? true,
           );
           _statusMessage =
@@ -242,7 +244,9 @@ class _MeterHomePageState extends State<MeterHomePage> {
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<String?>(
-            initialValue: _devices.any((device) => device.id == selectedId) ? selectedId : null,
+            initialValue: _devices.any((device) => device.id == selectedId)
+                ? selectedId
+                : null,
             items: <DropdownMenuItem<String?>>[
               const DropdownMenuItem<String?>(
                 value: null,
@@ -265,9 +269,13 @@ class _MeterHomePageState extends State<MeterHomePage> {
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 16),
-          _PeakMeter(label: 'Left', value: _leftPeak, color: const Color(0xFF0F766E)),
+          _PeakMeter(
+              label: 'Left', value: _leftPeak, color: const Color(0xFF0F766E)),
           const SizedBox(height: 12),
-          _PeakMeter(label: 'Right', value: _rightPeak, color: const Color(0xFFEA580C)),
+          _PeakMeter(
+              label: 'Right',
+              value: _rightPeak,
+              color: const Color(0xFFEA580C)),
         ],
       ),
     );

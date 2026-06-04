@@ -20,30 +20,32 @@ class MethodChannelSystemAudioMeter extends SystemAudioMeterPlatform {
 
   @override
   Stream<AudioLevels> get levels =>
-      _levels ??= eventChannel
-          .receiveBroadcastStream()
-          .map((dynamic event) => AudioLevels.fromMap(event as Map<dynamic, dynamic>));
+      _levels ??= eventChannel.receiveBroadcastStream().map((dynamic event) =>
+          AudioLevels.fromMap(event as Map<dynamic, dynamic>));
 
   @override
   Future<List<AudioOutputDevice>> getOutputDevices() async {
     final devices =
         await methodChannel.invokeListMethod<dynamic>('getOutputDevices') ??
-        const <dynamic>[];
+            const <dynamic>[];
     return devices
-        .map((dynamic device) => AudioOutputDevice.fromMap(device as Map<dynamic, dynamic>))
+        .map((dynamic device) =>
+            AudioOutputDevice.fromMap(device as Map<dynamic, dynamic>))
         .toList(growable: false);
   }
 
   @override
   Future<void> setOutputDevice(String? deviceId) {
-    return methodChannel.invokeMethod<void>('setOutputDevice', <String, Object?>{
+    return methodChannel
+        .invokeMethod<void>('setOutputDevice', <String, Object?>{
       'deviceId': deviceId,
     });
   }
 
   @override
   Future<AudioOutputDevice?> getCurrentOutputDevice() async {
-    final device = await methodChannel.invokeMethod<dynamic>('getCurrentOutputDevice');
+    final device =
+        await methodChannel.invokeMethod<dynamic>('getCurrentOutputDevice');
     if (device == null) {
       return null;
     }
