@@ -22,10 +22,8 @@ topics:
   - audio
   - coreaudio
   - desktop
-  - flutter-plugin
   - macos
   - meter
-  - wasapi
 
 screenshots:
   - description: Example app showing real-time stereo peak meters plus input and output device handling on Windows.
