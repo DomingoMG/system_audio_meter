@@ -5,6 +5,7 @@
 #include <flutter/event_sink.h>
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
+#include <mmdeviceapi.h>
 
 #include <atomic>
 #include <memory>
@@ -15,7 +16,9 @@
 
 namespace system_audio_meter {
 
-struct AudioOutputDeviceInfo {
+class DeviceNotificationClient;
+
+struct AudioDeviceInfo {
   std::string id;
   std::string name;
   bool is_default = false;
@@ -36,40 +39,82 @@ class SystemAudioMeterPlugin : public flutter::Plugin {
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
  private:
-  std::vector<AudioOutputDeviceInfo> EnumerateOutputDevices(
-      std::string* default_device_id = nullptr) const;
-  bool ResolveCurrentOutputDevice(AudioOutputDeviceInfo* device_info) const;
+  friend class DeviceNotificationClient;
+
+  std::vector<AudioDeviceInfo> EnumerateDevices(
+      EDataFlow flow, std::string* default_device_id = nullptr) const;
+  bool ResolveRequestedDevice(EDataFlow flow, const std::string& selected_device_id,
+                              const std::string& selected_device_name,
+                              IMMDeviceEnumerator* enumerator,
+                              IMMDevice** device,
+                              AudioDeviceInfo* device_info) const;
+  bool ResolveCurrentDevice(EDataFlow flow, AudioDeviceInfo* device_info) const;
   flutter::EncodableValue EncodeDevice(
-      const AudioOutputDeviceInfo& device_info) const;
+      const AudioDeviceInfo& device_info) const;
 
   std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>>
-  OnListen(std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>&& events);
-  std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>> OnCancel();
+  OnOutputListen(
+      std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>&& events);
+  std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>>
+  OnOutputCancel();
+  std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>>
+  OnInputListen(
+      std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>&& events);
+  std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>>
+  OnInputCancel();
 
-  void SyncCaptureState(bool force_restart = false);
-  void CaptureLoop(std::string selected_device_id);
-  void EmitLevels(double left_peak, double right_peak,
-                  const std::string& output_device_id,
-                  const std::string& output_device_name);
-  void EmitError(const std::string& code, const std::string& message);
-  void ClearCurrentDevice();
+  void SyncCaptureState(EDataFlow flow, bool force_restart = false);
+  void CaptureLoop(EDataFlow flow, std::string selected_device_id);
+  void EmitLevels(EDataFlow flow, double left_peak, double right_peak,
+                  const std::string& device_id, const std::string& device_name);
+  void EmitDeviceEvent(EDataFlow flow, const std::string& kind,
+                       const std::string& device_id,
+                       const std::string& device_name, bool is_default,
+                       bool is_selected);
+  void EmitError(EDataFlow flow, const std::string& code,
+                 const std::string& message);
+  void ClearCurrentDevice(EDataFlow flow);
+  void RegisterDeviceNotifications();
+  void UnregisterDeviceNotifications();
+  void HandleDeviceNotification(EDataFlow flow, const std::string* device_id,
+                                bool default_device_changed);
 
   flutter::PluginRegistrarWindows* registrar_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> method_channel_;
-  std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>> event_channel_;
+  std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
+      output_event_channel_;
+  std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
+      input_event_channel_;
+  std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
+      device_event_channel_;
 
   mutable std::mutex state_mutex_;
-  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink_;
-  std::thread capture_thread_;
-  std::atomic<bool> stop_requested_{false};
-  std::atomic<bool> capture_active_{false};
+  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> output_event_sink_;
+  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> input_event_sink_;
+  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> device_event_sink_;
+  std::thread output_capture_thread_;
+  std::thread input_capture_thread_;
+  IMMDeviceEnumerator* notification_enumerator_ = nullptr;
+  IMMNotificationClient* notification_client_ = nullptr;
+  std::atomic<bool> output_stop_requested_{false};
+  std::atomic<bool> input_stop_requested_{false};
+  std::atomic<bool> output_capture_active_{false};
+  std::atomic<bool> input_capture_active_{false};
 
-  bool listener_active_ = false;
-  bool requested_running_ = false;
-  std::string selected_device_id_;
-  std::string current_device_id_;
-  std::string current_device_name_;
-  bool current_device_is_default_ = false;
+  bool output_listener_active_ = false;
+  bool input_listener_active_ = false;
+  bool output_requested_running_ = false;
+  bool input_requested_running_ = false;
+  std::string selected_output_device_id_;
+  std::string selected_input_device_id_;
+  std::string selected_output_device_name_;
+  std::string selected_input_device_name_;
+  std::string current_output_device_id_;
+  std::string current_input_device_id_;
+  std::string current_output_device_name_;
+  std::string current_input_device_name_;
+  bool current_output_device_is_default_ = false;
+  bool current_input_device_is_default_ = false;
 };
 
 }  // namespace system_audio_meter

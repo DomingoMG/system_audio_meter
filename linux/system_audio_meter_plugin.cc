@@ -13,8 +13,10 @@
 
 struct _SystemAudioMeterPlugin {
   GObject parent_instance;
-  gchar* selected_device_id;
-  gboolean is_running;
+  gchar* selected_output_device_id;
+  gchar* selected_input_device_id;
+  gboolean is_output_running;
+  gboolean is_input_running;
 };
 
 G_DEFINE_TYPE(SystemAudioMeterPlugin, system_audio_meter_plugin, g_object_get_type())
@@ -22,7 +24,8 @@ G_DEFINE_TYPE(SystemAudioMeterPlugin, system_audio_meter_plugin, g_object_get_ty
 namespace {
 
 constexpr char kMethodChannelName[] = "system_audio_meter";
-constexpr char kEventChannelName[] = "system_audio_meter/levels";
+constexpr char kOutputEventChannelName[] = "system_audio_meter/levels";
+constexpr char kInputEventChannelName[] = "system_audio_meter/input_levels";
 constexpr char kUnsupportedCode[] = "unsupported";
 constexpr char kUnsupportedMessage[] =
     "System output metering is not implemented on Linux yet. A safe PulseAudio or PipeWire backend still needs to be added.";
@@ -63,24 +66,44 @@ static void system_audio_meter_plugin_handle_method_call(
 
   if (strcmp(method, "getOutputDevices") == 0) {
     response = empty_devices_response();
+  } else if (strcmp(method, "getInputDevices") == 0) {
+    response = empty_devices_response();
   } else if (strcmp(method, "setOutputDevice") == 0) {
     FlValue* args = fl_method_call_get_args(method_call);
     FlValue* device_id = device_id_arg(args);
-    g_free(self->selected_device_id);
-    self->selected_device_id = nullptr;
+    g_free(self->selected_output_device_id);
+    self->selected_output_device_id = nullptr;
     if (device_id != nullptr && fl_value_get_type(device_id) == FL_VALUE_TYPE_STRING) {
-      self->selected_device_id = g_strdup(fl_value_get_string(device_id));
+      self->selected_output_device_id = g_strdup(fl_value_get_string(device_id));
+    }
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+  } else if (strcmp(method, "setInputDevice") == 0) {
+    FlValue* args = fl_method_call_get_args(method_call);
+    FlValue* device_id = device_id_arg(args);
+    g_free(self->selected_input_device_id);
+    self->selected_input_device_id = nullptr;
+    if (device_id != nullptr && fl_value_get_type(device_id) == FL_VALUE_TYPE_STRING) {
+      self->selected_input_device_id = g_strdup(fl_value_get_string(device_id));
     }
     response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
   } else if (strcmp(method, "getCurrentOutputDevice") == 0) {
     response = current_device_response();
+  } else if (strcmp(method, "getCurrentInputDevice") == 0) {
+    response = current_device_response();
   } else if (strcmp(method, "start") == 0) {
     response = unsupported_response();
+  } else if (strcmp(method, "startInput") == 0) {
+    response = unsupported_response();
   } else if (strcmp(method, "stop") == 0) {
-    self->is_running = FALSE;
+    self->is_output_running = FALSE;
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+  } else if (strcmp(method, "stopInput") == 0) {
+    self->is_input_running = FALSE;
     response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
   } else if (strcmp(method, "isRunning") == 0) {
-    response = is_running_response(self->is_running);
+    response = is_running_response(self->is_output_running);
+  } else if (strcmp(method, "isInputRunning") == 0) {
+    response = is_running_response(self->is_input_running);
   } else {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
   }
@@ -97,13 +120,15 @@ static FlMethodErrorResponse* system_audio_meter_plugin_on_listen(
 static FlMethodErrorResponse* system_audio_meter_plugin_on_cancel(
     SystemAudioMeterPlugin* self,
     FlValue* args) {
-  self->is_running = FALSE;
+  self->is_output_running = FALSE;
+  self->is_input_running = FALSE;
   return nullptr;
 }
 
 static void system_audio_meter_plugin_dispose(GObject* object) {
   SystemAudioMeterPlugin* self = SYSTEM_AUDIO_METER_PLUGIN(object);
-  g_clear_pointer(&self->selected_device_id, g_free);
+  g_clear_pointer(&self->selected_output_device_id, g_free);
+  g_clear_pointer(&self->selected_input_device_id, g_free);
   G_OBJECT_CLASS(system_audio_meter_plugin_parent_class)->dispose(object);
 }
 
@@ -112,8 +137,10 @@ static void system_audio_meter_plugin_class_init(SystemAudioMeterPluginClass* kl
 }
 
 static void system_audio_meter_plugin_init(SystemAudioMeterPlugin* self) {
-  self->selected_device_id = nullptr;
-  self->is_running = FALSE;
+  self->selected_output_device_id = nullptr;
+  self->selected_input_device_id = nullptr;
+  self->is_output_running = FALSE;
+  self->is_input_running = FALSE;
 }
 
 static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
@@ -146,10 +173,18 @@ void system_audio_meter_plugin_register_with_registrar(FlPluginRegistrar* regist
                                             g_object_ref(plugin), g_object_unref);
 
   g_autoptr(FlStandardMethodCodec) event_codec = fl_standard_method_codec_new();
-  g_autoptr(FlEventChannel) event_channel =
+  g_autoptr(FlEventChannel) output_event_channel =
       fl_event_channel_new(fl_plugin_registrar_get_messenger(registrar),
-                           kEventChannelName, FL_METHOD_CODEC(event_codec));
-  fl_event_channel_set_stream_handlers(event_channel, event_listen_cb,
+                           kOutputEventChannelName, FL_METHOD_CODEC(event_codec));
+  fl_event_channel_set_stream_handlers(output_event_channel, event_listen_cb,
+                                       event_cancel_cb, g_object_ref(plugin),
+                                       g_object_unref);
+
+  g_autoptr(FlStandardMethodCodec) input_event_codec = fl_standard_method_codec_new();
+  g_autoptr(FlEventChannel) input_event_channel =
+      fl_event_channel_new(fl_plugin_registrar_get_messenger(registrar),
+                           kInputEventChannelName, FL_METHOD_CODEC(input_event_codec));
+  fl_event_channel_set_stream_handlers(input_event_channel, event_listen_cb,
                                        event_cancel_cb, g_object_ref(plugin),
                                        g_object_unref);
   g_object_unref(plugin);

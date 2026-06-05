@@ -5,6 +5,8 @@ class AudioLevels {
     required this.timestamp,
     this.outputDeviceId,
     this.outputDeviceName,
+    this.inputDeviceId,
+    this.inputDeviceName,
   });
 
   final double leftPeak;
@@ -12,6 +14,8 @@ class AudioLevels {
   final DateTime timestamp;
   final String? outputDeviceId;
   final String? outputDeviceName;
+  final String? inputDeviceId;
+  final String? inputDeviceName;
 
   factory AudioLevels.fromMap(Map<dynamic, dynamic> map) {
     return AudioLevels(
@@ -23,6 +27,8 @@ class AudioLevels {
       ),
       outputDeviceId: map['outputDeviceId'] as String?,
       outputDeviceName: map['outputDeviceName'] as String?,
+      inputDeviceId: map['inputDeviceId'] as String?,
+      inputDeviceName: map['inputDeviceName'] as String?,
     );
   }
 

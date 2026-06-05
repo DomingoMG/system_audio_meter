@@ -32,12 +32,28 @@ abstract class SystemAudioMeterPlatform extends PlatformInterface
       throw UnimplementedError('levels has not been implemented.');
 
   @override
+  Stream<AudioLevels> get inputLevels =>
+      throw UnimplementedError('inputLevels has not been implemented.');
+
+  @override
+  Stream<AudioDeviceEvent> get deviceEvents =>
+      throw UnimplementedError('deviceEvents has not been implemented.');
+
+  @override
   Future<List<AudioOutputDevice>> getOutputDevices() =>
       throw UnimplementedError('getOutputDevices() has not been implemented.');
 
   @override
+  Future<List<AudioInputDevice>> getInputDevices() =>
+      throw UnimplementedError('getInputDevices() has not been implemented.');
+
+  @override
   Future<void> setOutputDevice(String? deviceId) =>
       throw UnimplementedError('setOutputDevice() has not been implemented.');
+
+  @override
+  Future<void> setInputDevice(String? deviceId) =>
+      throw UnimplementedError('setInputDevice() has not been implemented.');
 
   @override
   Future<AudioOutputDevice?> getCurrentOutputDevice() =>
@@ -46,14 +62,32 @@ abstract class SystemAudioMeterPlatform extends PlatformInterface
       );
 
   @override
+  Future<AudioInputDevice?> getCurrentInputDevice() =>
+      throw UnimplementedError(
+        'getCurrentInputDevice() has not been implemented.',
+      );
+
+  @override
   Future<void> start() =>
       throw UnimplementedError('start() has not been implemented.');
+
+  @override
+  Future<void> startInput() =>
+      throw UnimplementedError('startInput() has not been implemented.');
 
   @override
   Future<void> stop() =>
       throw UnimplementedError('stop() has not been implemented.');
 
   @override
+  Future<void> stopInput() =>
+      throw UnimplementedError('stopInput() has not been implemented.');
+
+  @override
   Future<bool> get isRunning =>
       throw UnimplementedError('isRunning has not been implemented.');
+
+  @override
+  Future<bool> get isInputRunning =>
+      throw UnimplementedError('isInputRunning has not been implemented.');
 }
