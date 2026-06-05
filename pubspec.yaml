@@ -1,6 +1,6 @@
 name: system_audio_meter
 description: Real-time desktop audio level meter for Flutter with input/output device monitoring.
-version: 0.2.0
+version: 0.3.0
 homepage: https://pub.dev/packages/system_audio_meter
 documentation: https://pub.dev/packages/system_audio_meter
 
@@ -20,14 +20,18 @@ dev_dependencies:
 
 topics:
   - audio
+  - coreaudio
   - desktop
   - flutter-plugin
+  - macos
   - meter
   - wasapi
 
 screenshots:
   - description: Example app showing real-time stereo peak meters plus input and output device handling on Windows.
-    path: screenshots/screenshot_01.jpeg
+    path: screenshots/screenshot_windows.jpeg
+  - description: Example app showing real-time stereo peak meters plus input and output device handling on macOS.
+    path: screenshots/screenshot_macos.png
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

@@ -1,3 +1,11 @@
+## 0.3.0
+
+- Added macOS output metering using Core Audio taps and a private aggregate device.
+- Added macOS input metering using CoreAudio device capture.
+- Added macOS device connect/disconnect monitoring and active-meter reattachment behavior.
+- Added explicit microphone-permission handling for macOS input metering.
+- Documented macOS 14.2+ requirements, privacy keys, and sandbox entitlements.
+
 ## 0.2.0
 
 - Added `AudioDeviceEvent`, `AudioDeviceEventKind`, and `AudioDeviceFlow`.
@@ -22,5 +30,6 @@
 - Added `AudioLevels` and `AudioOutputDevice` models.
 - Added `MethodChannel` and `EventChannel` integration for meter streaming.
 - Added Windows WASAPI loopback support for real-time stereo peak levels.
-- Added safe unsupported stubs for macOS and Linux.
+- Added macOS system output metering with Core Audio taps and a private aggregate device.
+- Added a safe unsupported stub for Linux.
 - Added an example app, screenshot assets, and README documentation.
