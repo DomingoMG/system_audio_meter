@@ -1,3 +1,9 @@
+## 0.3.1
+
+- Improved the README for pub.dev and pointed users to the official documentation website.
+- Added package metadata for repository, issue tracker, and hosted documentation.
+- Added MkDocs-based documentation publishing infrastructure for GitHub Pages.
+
 ## 0.3.0
 
 - Added macOS output metering using Core Audio taps and a private aggregate device.
