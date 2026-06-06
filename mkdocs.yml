@@ -3,9 +3,9 @@ site_description: Real-time desktop audio metering for Flutter on Windows and ma
 site_url: https://domingomg.github.io/system_audio_meter/
 repo_url: https://github.com/DomingoMG/system_audio_meter
 repo_name: DomingoMG/system_audio_meter
-edit_uri: edit/main/docs/
+edit_uri: edit/main/doc/
 
-docs_dir: docs
+docs_dir: doc
 site_dir: site
 strict: true
 
