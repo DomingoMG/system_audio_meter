@@ -4,12 +4,12 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'system_audio_meter'
-  s.version          = '0.3.0'
+  s.version          = '0.4.0'
   s.summary          = 'Real-time desktop audio level meter for Flutter.'
   s.description      = <<-DESC
 Real-time desktop audio level meter for Flutter with macOS and Windows native backends.
                        DESC
-  s.homepage         = 'https://pub.dev/packages/system_audio_meter'
+  s.homepage         = 'https://github.com/DomingoMG/system_audio_meter'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'system_audio_meter' => 'noreply@example.com' }
 

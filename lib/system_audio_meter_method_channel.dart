@@ -7,6 +7,9 @@ import 'src/audio_device_event.dart';
 import 'src/audio_input_device.dart';
 import 'src/audio_levels.dart';
 import 'src/audio_output_device.dart';
+import 'src/audio_silence_event.dart';
+import 'src/audio_silence_stage.dart';
+import 'src/audio_silence_tracker.dart';
 import 'system_audio_meter_platform_interface.dart';
 
 /// An implementation of [SystemAudioMeterPlatform] that uses method channels.
@@ -26,14 +29,22 @@ class MethodChannelSystemAudioMeter extends SystemAudioMeterPlatform {
   final EventChannel deviceEventChannel =
       const EventChannel('system_audio_meter/device_events');
 
+  @visibleForTesting
+  final EventChannel silenceEventChannel =
+      const EventChannel('system_audio_meter/silence_events');
+
   Stream<AudioLevels>? _levels;
   Stream<AudioLevels>? _inputLevels;
   Stream<AudioDeviceEvent>? _deviceEvents;
+  Stream<AudioSilenceEvent>? _silenceEvents;
 
   @override
-  Stream<AudioLevels> get levels =>
+  Stream<AudioLevels> get outputLevels =>
       _levels ??= eventChannel.receiveBroadcastStream().map((dynamic event) =>
           AudioLevels.fromMap(event as Map<dynamic, dynamic>));
+
+  @override
+  Stream<AudioLevels> get levels => outputLevels;
 
   @override
   Stream<AudioLevels> get inputLevels => _inputLevels ??=
@@ -44,6 +55,11 @@ class MethodChannelSystemAudioMeter extends SystemAudioMeterPlatform {
   Stream<AudioDeviceEvent> get deviceEvents => _deviceEvents ??=
       deviceEventChannel.receiveBroadcastStream().map((dynamic event) =>
           AudioDeviceEvent.fromMap(event as Map<dynamic, dynamic>));
+
+  @override
+  Stream<AudioSilenceEvent> get silenceEvents => _silenceEvents ??=
+      silenceEventChannel.receiveBroadcastStream().map((dynamic event) =>
+          AudioSilenceEvent.fromMap(event as Map<dynamic, dynamic>));
 
   @override
   Future<List<AudioOutputDevice>> getOutputDevices() async {
@@ -120,6 +136,44 @@ class MethodChannelSystemAudioMeter extends SystemAudioMeterPlatform {
   @override
   Future<void> stopInput() {
     return methodChannel.invokeMethod<void>('stopInput');
+  }
+
+  @override
+  Future<void> enableSilenceDetection({
+    required AudioDeviceFlow flow,
+    required double threshold,
+    required Duration duration,
+  }) {
+    return methodChannel.invokeMethod<void>(
+      'enableSilenceDetection',
+      <String, Object?>{
+        'flow': flow == AudioDeviceFlow.input ? 'input' : 'output',
+        'threshold': threshold,
+        'durationMs': duration.inMilliseconds,
+      },
+    );
+  }
+
+  @override
+  Future<void> disableSilenceDetection({
+    required AudioDeviceFlow flow,
+  }) {
+    return methodChannel.invokeMethod<void>(
+      'disableSilenceDetection',
+      <String, Object?>{
+        'flow': flow == AudioDeviceFlow.input ? 'input' : 'output',
+      },
+    );
+  }
+
+  @override
+  AudioSilenceTracker createSilenceTracker({
+    required List<AudioSilenceStage> stages,
+  }) {
+    return AudioSilenceTracker(
+      events: silenceEvents,
+      stages: stages,
+    );
   }
 
   @override

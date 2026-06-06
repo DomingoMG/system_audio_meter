@@ -59,6 +59,7 @@ private let kMethodChannelName = "system_audio_meter"
 private let kOutputEventChannelName = "system_audio_meter/levels"
 private let kInputEventChannelName = "system_audio_meter/input_levels"
 private let kDeviceEventChannelName = "system_audio_meter/device_events"
+private let kSilenceEventChannelName = "system_audio_meter/silence_events"
 private let kEmitIntervalNanos: UInt64 = 33_000_000
 private let kAggregateDescriptionNameKey = "name"
 private let kAggregateDescriptionUIDKey = "uid"
@@ -109,9 +110,11 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
   private var outputEventSink: FlutterEventSink?
   private var inputEventSink: FlutterEventSink?
   private var deviceEventSink: FlutterEventSink?
+  private var silenceEventSink: FlutterEventSink?
 
   private var outputListenerActive = false
   private var inputListenerActive = false
+  private var silenceListenerActive = false
   private var outputRequestedRunning = false
   private var inputRequestedRunning = false
 
@@ -148,9 +151,24 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
   private var inputPendingRightPeak = 0.0
   private var inputLastEmitUptimeNanos: UInt64 = 0
 
+  private var outputSilenceDetectionEnabled = false
+  private var outputSilenceThreshold = 0.0
+  private var outputSilenceDurationNanos: UInt64 = 0
+  private var outputSilenceCandidateStartUptimeNanos: UInt64 = 0
+  private var outputSilenceIsActive = false
+  private var outputSilenceBootstrapTimer: DispatchSourceTimer?
+
+  private var inputSilenceDetectionEnabled = false
+  private var inputSilenceThreshold = 0.0
+  private var inputSilenceDurationNanos: UInt64 = 0
+  private var inputSilenceCandidateStartUptimeNanos: UInt64 = 0
+  private var inputSilenceIsActive = false
+  private var inputSilenceBootstrapTimer: DispatchSourceTimer?
+
   private var outputStreamHandler: ClosureStreamHandler?
   private var inputStreamHandler: ClosureStreamHandler?
   private var deviceStreamHandler: ClosureStreamHandler?
+  private var silenceStreamHandler: ClosureStreamHandler?
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = SystemAudioMeterPlugin()
@@ -172,6 +190,10 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
       name: kDeviceEventChannelName,
       binaryMessenger: registrar.messenger
     )
+    let silenceEventChannel = FlutterEventChannel(
+      name: kSilenceEventChannelName,
+      binaryMessenger: registrar.messenger
+    )
 
     let outputHandler = ClosureStreamHandler(
       onListen: { sink in instance.setEventSink(flow: .output, sink: sink) },
@@ -185,14 +207,20 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
       onListen: { sink in instance.setDeviceEventSink(sink) },
       onCancel: { instance.clearDeviceEventSink() }
     )
+    let silenceHandler = ClosureStreamHandler(
+      onListen: { sink in instance.setSilenceEventSink(sink) },
+      onCancel: { instance.clearSilenceEventSink() }
+    )
 
     instance.outputStreamHandler = outputHandler
     instance.inputStreamHandler = inputHandler
     instance.deviceStreamHandler = deviceHandler
+    instance.silenceStreamHandler = silenceHandler
 
     outputEventChannel.setStreamHandler(outputHandler)
     inputEventChannel.setStreamHandler(inputHandler)
     deviceEventChannel.setStreamHandler(deviceHandler)
+    silenceEventChannel.setStreamHandler(silenceHandler)
 
     instance.initializeKnownDevices()
     instance.registerDeviceNotifications()
@@ -235,6 +263,14 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
     case "stopInput":
       setRequestedRunning(flow: .input, running: false)
       syncCaptureState(flow: .input)
+      result(nil)
+    case "enableSilenceDetection":
+      enableSilenceDetection(arguments: call.arguments, result: result)
+    case "disableSilenceDetection":
+      let args = call.arguments as? [String: Any]
+      let flow: AudioFlow = (args?["flow"] as? String) == "input" ? .input : .output
+      resetSilenceDetectionState(flow: flow, preserveConfiguration: false)
+      syncCaptureState(flow: flow)
       result(nil)
     case "isRunning":
       result(isCaptureActive(flow: .output))
@@ -346,6 +382,72 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
     stateLock.unlock()
   }
 
+  private func setSilenceEventSink(_ sink: @escaping FlutterEventSink) {
+    stateLock.lock()
+    silenceEventSink = sink
+    silenceListenerActive = true
+    stateLock.unlock()
+    syncCaptureState(flow: .output)
+    syncCaptureState(flow: .input)
+  }
+
+  private func clearSilenceEventSink() {
+    stateLock.lock()
+    silenceEventSink = nil
+    silenceListenerActive = false
+    stateLock.unlock()
+    syncCaptureState(flow: .output)
+    syncCaptureState(flow: .input)
+  }
+
+  private func enableSilenceDetection(arguments: Any?, result: @escaping FlutterResult) {
+    let args = arguments as? [String: Any]
+    let flow: AudioFlow = (args?["flow"] as? String) == "input" ? .input : .output
+    let threshold = (args?["threshold"] as? NSNumber)?.doubleValue ?? -1.0
+    let durationMs = (args?["durationMs"] as? NSNumber)?.int64Value ?? 0
+
+    guard threshold.isFinite, threshold >= 0.0, threshold <= 1.0 else {
+      result(
+        FlutterError(
+          code: "invalid_silence_threshold",
+          message: "Silence detection threshold must be a finite value between 0.0 and 1.0.",
+          details: nil
+        )
+      )
+      return
+    }
+
+    guard durationMs > 0 else {
+      result(
+        FlutterError(
+          code: "invalid_silence_duration",
+          message: "Silence detection duration must be greater than 0 milliseconds.",
+          details: nil
+        )
+      )
+      return
+    }
+
+    stateLock.lock()
+    switch flow {
+    case .output:
+      outputSilenceDetectionEnabled = true
+      outputSilenceThreshold = threshold
+      outputSilenceDurationNanos = UInt64(durationMs) * 1_000_000
+      outputSilenceCandidateStartUptimeNanos = 0
+      outputSilenceIsActive = false
+    case .input:
+      inputSilenceDetectionEnabled = true
+      inputSilenceThreshold = threshold
+      inputSilenceDurationNanos = UInt64(durationMs) * 1_000_000
+      inputSilenceCandidateStartUptimeNanos = 0
+      inputSilenceIsActive = false
+    }
+    stateLock.unlock()
+    syncCaptureState(flow: flow)
+    result(nil)
+  }
+
   private func setRequestedRunning(flow: AudioFlow, running: Bool) {
     stateLock.lock()
     switch flow {
@@ -418,7 +520,10 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
   }
 
   private func listenerActive(flow: AudioFlow) -> Bool {
-    flow == .output ? outputListenerActive : inputListenerActive
+    if flow == .output {
+      return outputListenerActive || (silenceListenerActive && outputSilenceDetectionEnabled)
+    }
+    return inputListenerActive || (silenceListenerActive && inputSilenceDetectionEnabled)
   }
 
   private func captureActive(flow: AudioFlow) -> Bool {
@@ -504,6 +609,7 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
       setCurrentDevice(device, flow: .output)
       outputCaptureActive = true
       stateLock.unlock()
+      prepareInitialSilenceDetection(flow: .output)
     } catch let error as CaptureSetupError {
       emitError(flow: .output, code: error.code, message: error.message)
     } catch {
@@ -526,6 +632,7 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
     outputCaptureActive = false
     clearCurrentDevice(flow: .output)
     stateLock.unlock()
+    resetSilenceDetectionState(flow: .output, preserveConfiguration: true)
 
     if let ioProcId, aggregateDeviceId != 0 {
       AudioDeviceStop(aggregateDeviceId, ioProcId)
@@ -593,6 +700,7 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
     setCurrentDevice(device, flow: .input)
     inputCaptureActive = true
     stateLock.unlock()
+    prepareInitialSilenceDetection(flow: .input)
   }
 
   private func stopInputCapture() {
@@ -613,6 +721,7 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
       AudioDeviceStop(runningDeviceId, ioProcId)
       AudioDeviceDestroyIOProcID(runningDeviceId, ioProcId)
     }
+    resetSilenceDetectionState(flow: .input, preserveConfiguration: true)
   }
 
   fileprivate func handleAudioCallback(
@@ -670,8 +779,25 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
     stateLock.unlock()
 
     guard shouldEmit, let sink else {
+      if shouldEmit {
+        processSilenceDetection(
+          flow: flow,
+          peakLevel: max(leftToEmit, rightToEmit),
+          nowUptimeNanos: now,
+          deviceId: currentDeviceId,
+          deviceName: currentDeviceName
+        )
+      }
       return noErr
     }
+
+    processSilenceDetection(
+      flow: flow,
+      peakLevel: max(leftToEmit, rightToEmit),
+      nowUptimeNanos: now,
+      deviceId: currentDeviceId,
+      deviceName: currentDeviceName
+    )
 
     DispatchQueue.main.async {
       var payload: [String: Any] = [
@@ -690,6 +816,226 @@ public class SystemAudioMeterPlugin: NSObject, FlutterPlugin {
     }
 
     return noErr
+  }
+
+  private func processSilenceDetection(
+    flow: AudioFlow,
+    peakLevel: Double,
+    nowUptimeNanos: UInt64,
+    deviceId: String,
+    deviceName: String
+  ) {
+    stateLock.lock()
+    let isEnabled: Bool
+    let threshold: Double
+    let durationNanos: UInt64
+    var candidateStart: UInt64
+    var isActive: Bool
+    switch flow {
+    case .output:
+      isEnabled = outputSilenceDetectionEnabled
+      threshold = outputSilenceThreshold
+      durationNanos = outputSilenceDurationNanos
+      candidateStart = outputSilenceCandidateStartUptimeNanos
+      isActive = outputSilenceIsActive
+    case .input:
+      isEnabled = inputSilenceDetectionEnabled
+      threshold = inputSilenceThreshold
+      durationNanos = inputSilenceDurationNanos
+      candidateStart = inputSilenceCandidateStartUptimeNanos
+      isActive = inputSilenceIsActive
+    }
+    guard isEnabled else {
+      stateLock.unlock()
+      return
+    }
+
+    let clampedPeak = clampPeak(peakLevel)
+    var eventType: String?
+    let sink = silenceEventSink
+
+    if clampedPeak < threshold {
+      if !isActive {
+        if candidateStart == 0 {
+          candidateStart = nowUptimeNanos
+        } else if nowUptimeNanos &- candidateStart >= durationNanos {
+          isActive = true
+          candidateStart = 0
+          eventType = "silenceStarted"
+        }
+      }
+    } else {
+      candidateStart = 0
+      if isActive {
+        isActive = false
+        eventType = "silenceEnded"
+      }
+    }
+
+    switch flow {
+    case .output:
+      outputSilenceCandidateStartUptimeNanos = candidateStart
+      outputSilenceIsActive = isActive
+    case .input:
+      inputSilenceCandidateStartUptimeNanos = candidateStart
+      inputSilenceIsActive = isActive
+    }
+    stateLock.unlock()
+
+    guard let eventType, let sink else {
+      return
+    }
+
+    DispatchQueue.main.async {
+      sink([
+        "type": eventType,
+        "flow": flow == .input ? "input" : "output",
+        "peakLevel": clampedPeak,
+        "timestamp": Int64(Date().timeIntervalSince1970 * 1000.0),
+        "deviceId": deviceId,
+        "deviceName": deviceName,
+      ])
+    }
+  }
+
+  private func resetSilenceDetectionState(flow: AudioFlow, preserveConfiguration: Bool) {
+    stateLock.lock()
+    switch flow {
+    case .output:
+      outputSilenceBootstrapTimer?.cancel()
+      outputSilenceBootstrapTimer = nil
+      outputSilenceCandidateStartUptimeNanos = 0
+      outputSilenceIsActive = false
+      if !preserveConfiguration {
+        outputSilenceDetectionEnabled = false
+        outputSilenceThreshold = 0.0
+        outputSilenceDurationNanos = 0
+      }
+    case .input:
+      inputSilenceBootstrapTimer?.cancel()
+      inputSilenceBootstrapTimer = nil
+      inputSilenceCandidateStartUptimeNanos = 0
+      inputSilenceIsActive = false
+      if !preserveConfiguration {
+        inputSilenceDetectionEnabled = false
+        inputSilenceThreshold = 0.0
+        inputSilenceDurationNanos = 0
+      }
+    }
+    stateLock.unlock()
+  }
+
+  private func prepareInitialSilenceDetection(flow: AudioFlow) {
+    stateLock.lock()
+    let now = DispatchTime.now().uptimeNanoseconds
+    let enabled: Bool
+    let durationNanos: UInt64
+    switch flow {
+    case .output:
+      guard outputSilenceDetectionEnabled else {
+        stateLock.unlock()
+        return
+      }
+      outputSilenceCandidateStartUptimeNanos = now
+      outputSilenceIsActive = false
+      outputSilenceBootstrapTimer?.cancel()
+      outputSilenceBootstrapTimer = nil
+      enabled = outputSilenceDetectionEnabled
+      durationNanos = outputSilenceDurationNanos
+    case .input:
+      guard inputSilenceDetectionEnabled else {
+        stateLock.unlock()
+        return
+      }
+      inputSilenceCandidateStartUptimeNanos = now
+      inputSilenceIsActive = false
+      inputSilenceBootstrapTimer?.cancel()
+      inputSilenceBootstrapTimer = nil
+      enabled = inputSilenceDetectionEnabled
+      durationNanos = inputSilenceDurationNanos
+    }
+    stateLock.unlock()
+
+    guard enabled, durationNanos > 0 else {
+      return
+    }
+
+    let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
+    timer.schedule(deadline: .now() + .nanoseconds(Int(durationNanos)))
+    timer.setEventHandler { [weak self] in
+      self?.emitInitialSilenceIfNeeded(flow: flow)
+    }
+    timer.resume()
+
+    stateLock.lock()
+    switch flow {
+    case .output:
+      outputSilenceBootstrapTimer = timer
+    case .input:
+      inputSilenceBootstrapTimer = timer
+    }
+    stateLock.unlock()
+  }
+
+  private func emitInitialSilenceIfNeeded(flow: AudioFlow) {
+    stateLock.lock()
+    let now = DispatchTime.now().uptimeNanoseconds
+    let sink = silenceEventSink
+    let candidateStart: UInt64
+    let durationNanos: UInt64
+    let enabled: Bool
+    let isActive: Bool
+    let deviceId: String
+    let deviceName: String
+
+    switch flow {
+    case .output:
+      outputSilenceBootstrapTimer = nil
+      candidateStart = outputSilenceCandidateStartUptimeNanos
+      durationNanos = outputSilenceDurationNanos
+      enabled = outputSilenceDetectionEnabled
+      isActive = outputSilenceIsActive
+      deviceId = currentOutputDeviceId
+      deviceName = currentOutputDeviceName
+      if enabled && !isActive && candidateStart != 0 &&
+          now &- candidateStart >= durationNanos {
+        outputSilenceIsActive = true
+        outputSilenceCandidateStartUptimeNanos = 0
+      } else {
+        stateLock.unlock()
+        return
+      }
+    case .input:
+      inputSilenceBootstrapTimer = nil
+      candidateStart = inputSilenceCandidateStartUptimeNanos
+      durationNanos = inputSilenceDurationNanos
+      enabled = inputSilenceDetectionEnabled
+      isActive = inputSilenceIsActive
+      deviceId = currentInputDeviceId
+      deviceName = currentInputDeviceName
+      if enabled && !isActive && candidateStart != 0 &&
+          now &- candidateStart >= durationNanos {
+        inputSilenceIsActive = true
+        inputSilenceCandidateStartUptimeNanos = 0
+      } else {
+        stateLock.unlock()
+        return
+      }
+    }
+    stateLock.unlock()
+
+    guard let sink else {
+      return
+    }
+
+    sink([
+      "type": "silenceStarted",
+      "flow": flow == .input ? "input" : "output",
+      "peakLevel": 0.0,
+      "timestamp": Int64(Date().timeIntervalSince1970 * 1000.0),
+      "deviceId": deviceId,
+      "deviceName": deviceName,
+    ])
   }
 
   @available(macOS 14.2, *)

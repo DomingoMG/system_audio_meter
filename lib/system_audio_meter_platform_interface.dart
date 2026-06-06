@@ -28,8 +28,12 @@ abstract class SystemAudioMeterPlatform extends PlatformInterface
   }
 
   @override
+  Stream<AudioLevels> get outputLevels =>
+      throw UnimplementedError('outputLevels has not been implemented.');
+
+  @override
   Stream<AudioLevels> get levels =>
-      throw UnimplementedError('levels has not been implemented.');
+      outputLevels;
 
   @override
   Stream<AudioLevels> get inputLevels =>
@@ -38,6 +42,10 @@ abstract class SystemAudioMeterPlatform extends PlatformInterface
   @override
   Stream<AudioDeviceEvent> get deviceEvents =>
       throw UnimplementedError('deviceEvents has not been implemented.');
+
+  @override
+  Stream<AudioSilenceEvent> get silenceEvents =>
+      throw UnimplementedError('silenceEvents has not been implemented.');
 
   @override
   Future<List<AudioOutputDevice>> getOutputDevices() =>
@@ -84,10 +92,37 @@ abstract class SystemAudioMeterPlatform extends PlatformInterface
       throw UnimplementedError('stopInput() has not been implemented.');
 
   @override
+  Future<void> enableSilenceDetection({
+    required AudioDeviceFlow flow,
+    required double threshold,
+    required Duration duration,
+  }) => throw UnimplementedError(
+        'enableSilenceDetection() has not been implemented.',
+      );
+
+  @override
+  Future<void> disableSilenceDetection({
+    required AudioDeviceFlow flow,
+  }) =>
+      throw UnimplementedError(
+        'disableSilenceDetection() has not been implemented.',
+      );
+
+  @override
   Future<bool> get isRunning =>
       throw UnimplementedError('isRunning has not been implemented.');
 
   @override
   Future<bool> get isInputRunning =>
       throw UnimplementedError('isInputRunning has not been implemented.');
+
+  @override
+  AudioSilenceTracker createSilenceTracker({
+    required List<AudioSilenceStage> stages,
+  }) {
+    return AudioSilenceTracker(
+      events: silenceEvents,
+      stages: stages,
+    );
+  }
 }

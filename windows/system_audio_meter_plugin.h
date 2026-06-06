@@ -8,6 +8,7 @@
 #include <mmdeviceapi.h>
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -22,6 +23,15 @@ struct AudioDeviceInfo {
   std::string id;
   std::string name;
   bool is_default = false;
+};
+
+struct SilenceDetectionState {
+  bool enabled = false;
+  bool is_silent = false;
+  double threshold = 0.0;
+  std::chrono::milliseconds duration{0};
+  std::chrono::steady_clock::time_point candidate_started_at{};
+  bool has_candidate = false;
 };
 
 class SystemAudioMeterPlugin : public flutter::Plugin {
@@ -71,6 +81,11 @@ class SystemAudioMeterPlugin : public flutter::Plugin {
                        const std::string& device_id,
                        const std::string& device_name, bool is_default,
                        bool is_selected);
+  void ProcessSilenceDetection(EDataFlow flow, double peak_level,
+                               std::chrono::steady_clock::time_point now,
+                               const std::string& device_id,
+                               const std::string& device_name);
+  void ResetSilenceDetectionState(EDataFlow flow, bool preserve_configuration);
   void EmitError(EDataFlow flow, const std::string& code,
                  const std::string& message);
   void ClearCurrentDevice(EDataFlow flow);
@@ -87,11 +102,14 @@ class SystemAudioMeterPlugin : public flutter::Plugin {
       input_event_channel_;
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
       device_event_channel_;
+  std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
+      silence_event_channel_;
 
   mutable std::mutex state_mutex_;
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> output_event_sink_;
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> input_event_sink_;
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> device_event_sink_;
+  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> silence_event_sink_;
   std::thread output_capture_thread_;
   std::thread input_capture_thread_;
   IMMDeviceEnumerator* notification_enumerator_ = nullptr;
@@ -103,6 +121,7 @@ class SystemAudioMeterPlugin : public flutter::Plugin {
 
   bool output_listener_active_ = false;
   bool input_listener_active_ = false;
+  bool silence_listener_active_ = false;
   bool output_requested_running_ = false;
   bool input_requested_running_ = false;
   std::string selected_output_device_id_;
@@ -115,6 +134,8 @@ class SystemAudioMeterPlugin : public flutter::Plugin {
   std::string current_input_device_name_;
   bool current_output_device_is_default_ = false;
   bool current_input_device_is_default_ = false;
+  SilenceDetectionState output_silence_detection_state_;
+  SilenceDetectionState input_silence_detection_state_;
 };
 
 }  // namespace system_audio_meter

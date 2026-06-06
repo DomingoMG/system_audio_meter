@@ -34,11 +34,30 @@ class MeterHomePage extends StatefulWidget {
 }
 
 class _MeterHomePageState extends State<MeterHomePage> {
+  static const double _silenceThreshold = 0.05;
+  static const Duration _silenceDuration = Duration(seconds: 5);
+  static const List<AudioSilenceStage> _silenceStages = <AudioSilenceStage>[
+    AudioSilenceStage(
+      id: 'warning',
+      after: Duration(seconds: 5),
+      severity: 'warning',
+      label: 'Warning',
+    ),
+    AudioSilenceStage(
+      id: 'critical',
+      after: Duration(seconds: 10),
+      severity: 'critical',
+      label: 'Critical',
+    ),
+  ];
+
   final SystemAudioMeter _meter = SystemAudioMeter.instance;
+  late final AudioSilenceTracker _silenceTracker;
 
   StreamSubscription<AudioLevels>? _outputSubscription;
   StreamSubscription<AudioLevels>? _inputSubscription;
   StreamSubscription<AudioDeviceEvent>? _deviceEventSubscription;
+  StreamSubscription<AudioSilenceState>? _silenceSubscription;
   List<AudioOutputDevice> _outputDevices = const <AudioOutputDevice>[];
   List<AudioInputDevice> _inputDevices = const <AudioInputDevice>[];
   AudioOutputDevice? _currentOutputDevice;
@@ -49,16 +68,24 @@ class _MeterHomePageState extends State<MeterHomePage> {
   double _inputRightPeak = 0.0;
   bool _isOutputRunning = false;
   bool _isInputRunning = false;
+  bool _silenceDetectionEnabled = false;
+  bool _isOutputSilent = false;
+  bool _isInputSilent = false;
+  AudioSilenceStage? _outputSilenceStage;
+  AudioSilenceStage? _inputSilenceStage;
   bool _shouldResumeOutput = false;
   bool _shouldResumeInput = false;
   String? _outputStatusMessage;
   String? _inputStatusMessage;
+  String? _outputSilenceStatusMessage;
+  String? _inputSilenceStatusMessage;
   String? _errorMessage;
   bool _refreshingDevices = false;
 
   @override
   void initState() {
     super.initState();
+    _silenceTracker = _meter.createSilenceTracker(stages: _silenceStages);
     _initialize();
   }
 
@@ -67,13 +94,88 @@ class _MeterHomePageState extends State<MeterHomePage> {
     _outputSubscription?.cancel();
     _inputSubscription?.cancel();
     _deviceEventSubscription?.cancel();
+    _silenceSubscription?.cancel();
+    _silenceTracker.dispose();
+    unawaited(_meter.disableSilenceDetection(flow: AudioDeviceFlow.output));
+    unawaited(_meter.disableSilenceDetection(flow: AudioDeviceFlow.input));
     super.dispose();
   }
 
   Future<void> _initialize() async {
+    _listenToSilenceEvents();
+    await _configureSilenceDetection();
     _listenToDeviceEvents();
     await _refreshDevices();
     await _refreshRunningState();
+  }
+
+  Future<void> _configureSilenceDetection() async {
+    try {
+      await _meter.enableSilenceDetection(
+        flow: AudioDeviceFlow.output,
+        threshold: _silenceThreshold,
+        duration: _silenceDuration,
+      );
+      await _meter.enableSilenceDetection(
+        flow: AudioDeviceFlow.input,
+        threshold: _silenceThreshold,
+        duration: _silenceDuration,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _silenceDetectionEnabled = true;
+        final message =
+            'Silence detection enabled at ${(_silenceThreshold * 100).toStringAsFixed(0)}% for ${_silenceDuration.inSeconds}s. Stages: 5s warning, 10s critical.';
+        _outputSilenceStatusMessage = message;
+        _inputSilenceStatusMessage = message;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorMessage = '$error';
+        _silenceDetectionEnabled = false;
+      });
+    }
+  }
+
+  void _listenToSilenceEvents() {
+    _silenceSubscription ??= _silenceTracker.states.listen((AudioSilenceState state) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        final flowLabel = state.flow == AudioDeviceFlow.input ? 'Input' : 'Output';
+        final deviceSuffix = state.deviceName == null || state.deviceName!.isEmpty
+            ? ''
+            : ' on ${state.deviceName}';
+        final stageLabel = state.currentStage?.label ?? state.currentStage?.id;
+        final stageSuffix =
+            stageLabel == null ? '' : ' Stage: $stageLabel.';
+        final message = switch (state.type) {
+          AudioSilenceStateType.silent =>
+            '$flowLabel silence started at ${(state.peakLevel * 100).toStringAsFixed(1)}% peak$deviceSuffix.',
+          AudioSilenceStateType.stageChanged =>
+            '$flowLabel silence has lasted ${state.silentFor.inSeconds}s.$stageSuffix$deviceSuffix',
+          AudioSilenceStateType.active =>
+            '$flowLabel silence ended after ${state.silentFor.inSeconds}s at ${(state.peakLevel * 100).toStringAsFixed(1)}% peak$deviceSuffix.',
+        };
+
+        if (state.flow == AudioDeviceFlow.input) {
+          _isInputSilent = state.isSilent;
+          _inputSilenceStage = state.currentStage;
+          _inputSilenceStatusMessage = message;
+        } else {
+          _isOutputSilent = state.isSilent;
+          _outputSilenceStage = state.currentStage;
+          _outputSilenceStatusMessage = message;
+        }
+      });
+    });
   }
 
   void _listenToDeviceEvents() {
@@ -84,9 +186,15 @@ class _MeterHomePageState extends State<MeterHomePage> {
 
       if (event.flow == AudioDeviceFlow.input) {
         if (event.kind == AudioDeviceEventKind.disconnected) {
+          _silenceTracker.reset(
+            flow: AudioDeviceFlow.input,
+            emitState: false,
+          );
           setState(() {
             _inputLeftPeak = 0.0;
             _inputRightPeak = 0.0;
+            _isInputSilent = false;
+            _inputSilenceStage = null;
             _currentInputDevice = null;
             _isInputRunning = false;
             _inputStatusMessage = 'Input device disconnected or unavailable.';
@@ -110,9 +218,15 @@ class _MeterHomePageState extends State<MeterHomePage> {
       }
 
       if (event.kind == AudioDeviceEventKind.disconnected) {
+        _silenceTracker.reset(
+          flow: AudioDeviceFlow.output,
+          emitState: false,
+        );
         setState(() {
           _outputLeftPeak = 0.0;
           _outputRightPeak = 0.0;
+          _isOutputSilent = false;
+          _outputSilenceStage = null;
           _currentOutputDevice = null;
           _isOutputRunning = false;
           _outputStatusMessage = 'Output device disconnected or unavailable.';
@@ -195,7 +309,7 @@ class _MeterHomePageState extends State<MeterHomePage> {
       _shouldResumeOutput = true;
     });
 
-    _outputSubscription ??= _meter.levels.listen(
+    _outputSubscription ??= _meter.outputLevels.listen(
       (AudioLevels levels) {
         if (!mounted) {
           return;
@@ -225,9 +339,15 @@ class _MeterHomePageState extends State<MeterHomePage> {
         if (!mounted) {
           return;
         }
+        _silenceTracker.reset(
+          flow: AudioDeviceFlow.output,
+          emitState: false,
+        );
         setState(() {
           _outputLeftPeak = 0.0;
           _outputRightPeak = 0.0;
+          _isOutputSilent = false;
+          _outputSilenceStage = null;
           _currentOutputDevice = null;
           _errorMessage = '$error';
           _isOutputRunning = false;
@@ -260,6 +380,10 @@ class _MeterHomePageState extends State<MeterHomePage> {
   Future<void> _stopOutputMeter() async {
     try {
       await _meter.stop();
+      _silenceTracker.reset(
+        flow: AudioDeviceFlow.output,
+        emitState: false,
+      );
       await _refreshRunningState();
       if (!mounted) {
         return;
@@ -267,6 +391,8 @@ class _MeterHomePageState extends State<MeterHomePage> {
       setState(() {
         _outputLeftPeak = 0.0;
         _outputRightPeak = 0.0;
+        _isOutputSilent = false;
+        _outputSilenceStage = null;
         _outputStatusMessage = 'Output meter stopped.';
         _shouldResumeOutput = false;
       });
@@ -341,9 +467,15 @@ class _MeterHomePageState extends State<MeterHomePage> {
         if (!mounted) {
           return;
         }
+        _silenceTracker.reset(
+          flow: AudioDeviceFlow.input,
+          emitState: false,
+        );
         setState(() {
           _inputLeftPeak = 0.0;
           _inputRightPeak = 0.0;
+          _isInputSilent = false;
+          _inputSilenceStage = null;
           _currentInputDevice = null;
           _errorMessage = '$error';
           _isInputRunning = false;
@@ -376,6 +508,10 @@ class _MeterHomePageState extends State<MeterHomePage> {
   Future<void> _stopInputMeter() async {
     try {
       await _meter.stopInput();
+      _silenceTracker.reset(
+        flow: AudioDeviceFlow.input,
+        emitState: false,
+      );
       await _refreshRunningState();
       if (!mounted) {
         return;
@@ -383,6 +519,8 @@ class _MeterHomePageState extends State<MeterHomePage> {
       setState(() {
         _inputLeftPeak = 0.0;
         _inputRightPeak = 0.0;
+        _isInputSilent = false;
+        _inputSilenceStage = null;
         _inputStatusMessage = 'Input meter stopped.';
         _shouldResumeInput = false;
       });
@@ -451,6 +589,15 @@ class _MeterHomePageState extends State<MeterHomePage> {
             rightPeak: _outputRightPeak,
             accentColor: const Color(0xFF0F766E),
             secondaryColor: const Color(0xFFEA580C),
+            supplemental: _SilenceStatusCard(
+              enabled: _silenceDetectionEnabled,
+              isSilent: _isOutputSilent,
+              title: 'Output silence detector',
+              stage: _outputSilenceStage,
+              threshold: _silenceThreshold,
+              duration: _silenceDuration,
+              statusMessage: _outputSilenceStatusMessage,
+            ),
             onStart: _startOutputMeter,
             onStop: _stopOutputMeter,
             onRefresh: _refreshDevices,
@@ -477,6 +624,15 @@ class _MeterHomePageState extends State<MeterHomePage> {
             rightPeak: _inputRightPeak,
             accentColor: const Color(0xFF2563EB),
             secondaryColor: const Color(0xFFD97706),
+            supplemental: _SilenceStatusCard(
+              enabled: _silenceDetectionEnabled,
+              isSilent: _isInputSilent,
+              title: 'Input silence detector',
+              stage: _inputSilenceStage,
+              threshold: _silenceThreshold,
+              duration: _silenceDuration,
+              statusMessage: _inputSilenceStatusMessage,
+            ),
             onStart: _startInputMeter,
             onStop: _stopInputMeter,
             onRefresh: _refreshDevices,
@@ -527,6 +683,7 @@ class _MeterSection extends StatelessWidget {
     required this.rightPeak,
     required this.accentColor,
     required this.secondaryColor,
+    this.supplemental,
     required this.onStart,
     required this.onStop,
     required this.onRefresh,
@@ -544,6 +701,7 @@ class _MeterSection extends StatelessWidget {
   final double rightPeak;
   final Color accentColor;
   final Color secondaryColor;
+  final Widget? supplemental;
   final Future<void> Function() onStart;
   final Future<void> Function() onStop;
   final Future<void> Function() onRefresh;
@@ -563,6 +721,10 @@ class _MeterSection extends StatelessWidget {
             if (statusMessage != null) ...<Widget>[
               const SizedBox(height: 8),
               Text(statusMessage!),
+            ],
+            if (supplemental != null) ...<Widget>[
+              const SizedBox(height: 16),
+              supplemental!,
             ],
             const SizedBox(height: 16),
             Wrap(
@@ -667,6 +829,80 @@ class _PeakMeter extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SilenceStatusCard extends StatelessWidget {
+  const _SilenceStatusCard({
+    required this.enabled,
+    required this.isSilent,
+    required this.title,
+    this.stage,
+    required this.threshold,
+    required this.duration,
+    required this.statusMessage,
+  });
+
+  final bool enabled;
+  final bool isSilent;
+  final String title;
+  final AudioSilenceStage? stage;
+  final double threshold;
+  final Duration duration;
+  final String? statusMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final Color foreground = isSilent
+        ? const Color(0xFF92400E)
+        : const Color(0xFF166534);
+    final Color background = isSilent
+        ? const Color(0xFFFEF3C7)
+        : const Color(0xFFDCFCE7);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: enabled ? background : theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(
+                isSilent ? Icons.volume_off_rounded : Icons.graphic_eq_rounded,
+                color: enabled ? foreground : theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                enabled ? title : 'Silence detection unavailable',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: enabled ? foreground : theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Threshold: ${(threshold * 100).toStringAsFixed(0)}%  •  Duration: ${duration.inMilliseconds} ms',
+          ),
+          if (stage != null) ...<Widget>[
+            const SizedBox(height: 6),
+            Text(
+              'Current stage: ${stage?.label ?? stage?.id}${stage?.severity == null ? '' : ' (${stage!.severity})'}',
+            ),
+          ],
+          if (statusMessage != null) ...<Widget>[
+            const SizedBox(height: 6),
+            Text(statusMessage!),
+          ],
+        ],
+      ),
     );
   }
 }

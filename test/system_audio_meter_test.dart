@@ -13,11 +13,18 @@ class MockSystemAudioMeterPlatform
   Stream<AudioLevels> get levels => const Stream<AudioLevels>.empty();
 
   @override
+  Stream<AudioLevels> get outputLevels => const Stream<AudioLevels>.empty();
+
+  @override
   Stream<AudioLevels> get inputLevels => const Stream<AudioLevels>.empty();
 
   @override
   Stream<AudioDeviceEvent> get deviceEvents =>
       const Stream<AudioDeviceEvent>.empty();
+
+  @override
+  Stream<AudioSilenceEvent> get silenceEvents =>
+      const Stream<AudioSilenceEvent>.empty();
 
   @override
   Future<AudioOutputDevice?> getCurrentOutputDevice() => Future.value(
@@ -69,6 +76,28 @@ class MockSystemAudioMeterPlatform
 
   @override
   Future<void> stopInput() => Future.value();
+
+  @override
+  Future<void> enableSilenceDetection({
+    required AudioDeviceFlow flow,
+    required double threshold,
+    required Duration duration,
+  }) => Future.value();
+
+  @override
+  Future<void> disableSilenceDetection({
+    required AudioDeviceFlow flow,
+  }) => Future.value();
+
+  @override
+  AudioSilenceTracker createSilenceTracker({
+    required List<AudioSilenceStage> stages,
+  }) {
+    return AudioSilenceTracker(
+      events: silenceEvents,
+      stages: stages,
+    );
+  }
 }
 
 void main() {
