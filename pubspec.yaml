@@ -1,6 +1,6 @@
 name: system_audio_meter
 description: Real-time desktop audio level meter for Flutter with input/output device monitoring.
-version: 0.4.1
+version: 0.4.2
 homepage: https://github.com/DomingoMG/system_audio_meter
 documentation: https://domingomg.github.io/system_audio_meter/
 repository: https://github.com/DomingoMG/system_audio_meter

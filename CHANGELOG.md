@@ -1,3 +1,10 @@
+## 0.4.2
+
+- Improved Windows device integration so input and output capture re-sync more reliably after device changes.
+- Added fuller Windows device refresh handling with connect and disconnect event propagation aligned with the macOS behavior.
+- Fixed a Windows native build failure caused by local variable shadowing in the silence-detection argument parsing path.
+- Preserved the existing public Dart API while improving Windows stability for silence detection and reconnection scenarios.
+
 ## 0.4.1
 
 - Refactored the example application into smaller reusable widgets and pages.

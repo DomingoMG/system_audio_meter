@@ -56,7 +56,7 @@ Add the dependency:
 
 ```yaml
 dependencies:
-  system_audio_meter: ^0.4.1
+  system_audio_meter: ^0.4.2
 ```
 
 Or use:
