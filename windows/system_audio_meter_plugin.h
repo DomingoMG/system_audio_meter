@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace system_audio_meter {
@@ -91,6 +92,7 @@ class SystemAudioMeterPlugin : public flutter::Plugin {
   void ClearCurrentDevice(EDataFlow flow);
   void RegisterDeviceNotifications();
   void UnregisterDeviceNotifications();
+  void RefreshDevices(EDataFlow flow, bool default_device_changed);
   void HandleDeviceNotification(EDataFlow flow, const std::string* device_id,
                                 bool default_device_changed);
 
@@ -134,6 +136,8 @@ class SystemAudioMeterPlugin : public flutter::Plugin {
   std::string current_input_device_name_;
   bool current_output_device_is_default_ = false;
   bool current_input_device_is_default_ = false;
+  std::unordered_map<std::string, AudioDeviceInfo> known_output_devices_;
+  std::unordered_map<std::string, AudioDeviceInfo> known_input_devices_;
   SilenceDetectionState output_silence_detection_state_;
   SilenceDetectionState input_silence_detection_state_;
 };

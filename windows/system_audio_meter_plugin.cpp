@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -300,6 +301,16 @@ void ClearDeviceInfo(AudioDeviceInfo* device_info) {
   device_info->is_default = false;
 }
 
+std::unordered_map<std::string, AudioDeviceInfo> MakeDeviceMap(
+    const std::vector<AudioDeviceInfo>& devices) {
+  std::unordered_map<std::string, AudioDeviceInfo> result;
+  result.reserve(devices.size());
+  for (const auto& device : devices) {
+    result[device.id] = device;
+  }
+  return result;
+}
+
 }  // namespace
 
 class DeviceNotificationClient : public IMMNotificationClient {
@@ -494,6 +505,7 @@ SystemAudioMeterPlugin::SystemAudioMeterPlugin(
               silence_listener_active_ = true;
             }
             SyncCaptureState(eRender);
+            SyncCaptureState(eCapture);
             return nullptr;
           },
           [this](const EncodableValue* arguments)
@@ -504,10 +516,16 @@ SystemAudioMeterPlugin::SystemAudioMeterPlugin(
               silence_listener_active_ = false;
             }
             SyncCaptureState(eRender);
+            SyncCaptureState(eCapture);
             return nullptr;
           });
   silence_event_channel_->SetStreamHandler(std::move(silence_stream_handler));
 
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    known_output_devices_ = MakeDeviceMap(EnumerateDevices(eRender));
+    known_input_devices_ = MakeDeviceMap(EnumerateDevices(eCapture));
+  }
   RegisterDeviceNotifications();
 }
 
@@ -866,30 +884,36 @@ void SystemAudioMeterPlugin::HandleMethodCall(
     if (const auto* arguments = std::get_if<EncodableMap>(method_call.arguments())) {
       const auto flow_it = arguments->find(EncodableValue("flow"));
       if (flow_it != arguments->end()) {
-        if (const auto* value = std::get_if<std::string>(&flow_it->second)) {
-          flow = *value == "input" ? eCapture : eRender;
+        if (const auto* flow_value = std::get_if<std::string>(&flow_it->second)) {
+          flow = *flow_value == "input" ? eCapture : eRender;
         }
       }
 
       const auto threshold_it = arguments->find(EncodableValue("threshold"));
       if (threshold_it != arguments->end()) {
-        if (const auto* value = std::get_if<double>(&threshold_it->second)) {
-          threshold = *value;
-        } else if (const auto* value = std::get_if<int32_t>(&threshold_it->second)) {
-          threshold = static_cast<double>(*value);
-        } else if (const auto* value = std::get_if<int64_t>(&threshold_it->second)) {
-          threshold = static_cast<double>(*value);
+        if (const auto* threshold_double =
+                std::get_if<double>(&threshold_it->second)) {
+          threshold = *threshold_double;
+        } else if (const auto* threshold_int32 =
+                       std::get_if<int32_t>(&threshold_it->second)) {
+          threshold = static_cast<double>(*threshold_int32);
+        } else if (const auto* threshold_int64 =
+                       std::get_if<int64_t>(&threshold_it->second)) {
+          threshold = static_cast<double>(*threshold_int64);
         }
       }
 
       const auto duration_it = arguments->find(EncodableValue("durationMs"));
       if (duration_it != arguments->end()) {
-        if (const auto* value = std::get_if<int32_t>(&duration_it->second)) {
-          duration_ms = *value;
-        } else if (const auto* value = std::get_if<int64_t>(&duration_it->second)) {
-          duration_ms = *value;
-        } else if (const auto* value = std::get_if<double>(&duration_it->second)) {
-          duration_ms = static_cast<int64_t>(*value);
+        if (const auto* duration_int32 =
+                std::get_if<int32_t>(&duration_it->second)) {
+          duration_ms = *duration_int32;
+        } else if (const auto* duration_int64 =
+                       std::get_if<int64_t>(&duration_it->second)) {
+          duration_ms = *duration_int64;
+        } else if (const auto* duration_double =
+                       std::get_if<double>(&duration_it->second)) {
+          duration_ms = static_cast<int64_t>(*duration_double);
         }
       }
     }
@@ -1415,39 +1439,84 @@ void SystemAudioMeterPlugin::UnregisterDeviceNotifications() {
   }
 }
 
-void SystemAudioMeterPlugin::HandleDeviceNotification(
-    EDataFlow flow, const std::string* device_id, bool default_device_changed) {
-  bool should_restart = false;
+void SystemAudioMeterPlugin::RefreshDevices(EDataFlow flow,
+                                            bool default_device_changed) {
+  const auto devices = EnumerateDevices(flow);
+  const auto new_devices = MakeDeviceMap(devices);
+
+  std::unordered_map<std::string, AudioDeviceInfo> old_devices;
+  std::string selected_id;
+  std::string current_id;
+  bool should_run = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    auto& known_devices =
+        flow == eCapture ? known_input_devices_ : known_output_devices_;
+    old_devices = known_devices;
+    known_devices = new_devices;
+
+    selected_id =
+        flow == eCapture ? selected_input_device_id_ : selected_output_device_id_;
+    current_id =
+        flow == eCapture ? current_input_device_id_ : current_output_device_id_;
+
     const bool requested_running =
         flow == eCapture ? input_requested_running_ : output_requested_running_;
     const bool listener_active =
-        flow == eCapture ? input_listener_active_ : output_listener_active_;
-    const std::string& selected_device_id =
-        flow == eCapture ? selected_input_device_id_ : selected_output_device_id_;
-    const std::string& current_device_id =
-        flow == eCapture ? current_input_device_id_ : current_output_device_id_;
+        flow == eCapture
+            ? (input_listener_active_ ||
+               (silence_listener_active_ &&
+                input_silence_detection_state_.enabled))
+            : (output_listener_active_ ||
+               (silence_listener_active_ &&
+                output_silence_detection_state_.enabled));
+    should_run = requested_running && listener_active;
+  }
 
-    if (!(requested_running && listener_active)) {
-      return;
+  for (const auto& [device_id, device] : new_devices) {
+    if (old_devices.find(device_id) == old_devices.end()) {
+      EmitDeviceEvent(flow, "connected", device.id, device.name, device.is_default,
+                      !selected_id.empty() && selected_id == device.id);
     }
+  }
 
-    if (default_device_changed) {
-      should_restart = selected_device_id.empty();
-    } else if (current_device_id.empty()) {
-      should_restart = true;
-    } else if (device_id != nullptr && !selected_device_id.empty() &&
-               selected_device_id == *device_id) {
-      should_restart = true;
-    } else if (device_id != nullptr && current_device_id == *device_id) {
-      should_restart = true;
+  for (const auto& [device_id, device] : old_devices) {
+    if (new_devices.find(device_id) == new_devices.end()) {
+      EmitDeviceEvent(flow, "disconnected", device.id, device.name,
+                      device.is_default,
+                      !selected_id.empty() && selected_id == device.id);
     }
+  }
+
+  if (!should_run) {
+    return;
+  }
+
+  bool should_restart = false;
+  if (default_device_changed && selected_id.empty()) {
+    should_restart = true;
+  }
+  if (!current_id.empty() && old_devices.find(current_id) != old_devices.end() &&
+      new_devices.find(current_id) == new_devices.end()) {
+    should_restart = true;
+  }
+  if (!selected_id.empty() && old_devices.find(selected_id) != old_devices.end() &&
+      new_devices.find(selected_id) == new_devices.end()) {
+    should_restart = true;
+  }
+  if (current_id.empty() && !new_devices.empty() && old_devices.empty()) {
+    should_restart = true;
   }
 
   if (should_restart) {
     SyncCaptureState(flow, true);
   }
+}
+
+void SystemAudioMeterPlugin::HandleDeviceNotification(
+    EDataFlow flow, const std::string* device_id, bool default_device_changed) {
+  (void)device_id;
+  RefreshDevices(flow, default_device_changed);
 }
 
 }  // namespace system_audio_meter
