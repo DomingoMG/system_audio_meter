@@ -37,6 +37,7 @@ constexpr char kMethodChannelName[] = "system_audio_meter";
 constexpr char kOutputEventChannelName[] = "system_audio_meter/levels";
 constexpr char kInputEventChannelName[] = "system_audio_meter/input_levels";
 constexpr char kDeviceEventChannelName[] = "system_audio_meter/device_events";
+constexpr char kSilenceEventChannelName[] = "system_audio_meter/silence_events";
 constexpr REFERENCE_TIME kRequestedBufferDuration = 200000;
 constexpr auto kEmitInterval = std::chrono::milliseconds(33);
 
@@ -429,6 +430,10 @@ SystemAudioMeterPlugin::SystemAudioMeterPlugin(
       std::make_unique<flutter::EventChannel<EncodableValue>>(
           registrar_->messenger(), kDeviceEventChannelName,
           &flutter::StandardMethodCodec::GetInstance());
+  silence_event_channel_ =
+      std::make_unique<flutter::EventChannel<EncodableValue>>(
+          registrar_->messenger(), kSilenceEventChannelName,
+          &flutter::StandardMethodCodec::GetInstance());
 
   method_channel_->SetMethodCallHandler(
       [this](const auto& call, auto result) {
@@ -478,6 +483,31 @@ SystemAudioMeterPlugin::SystemAudioMeterPlugin(
           });
   device_event_channel_->SetStreamHandler(std::move(device_stream_handler));
 
+  auto silence_stream_handler =
+      std::make_unique<flutter::StreamHandlerFunctions<EncodableValue>>(
+          [this](const EncodableValue* arguments,
+                 std::unique_ptr<flutter::EventSink<EncodableValue>>&& events)
+              -> std::unique_ptr<flutter::StreamHandlerError<EncodableValue>> {
+            {
+              std::lock_guard<std::mutex> lock(state_mutex_);
+              silence_event_sink_ = std::move(events);
+              silence_listener_active_ = true;
+            }
+            SyncCaptureState(eRender);
+            return nullptr;
+          },
+          [this](const EncodableValue* arguments)
+              -> std::unique_ptr<flutter::StreamHandlerError<EncodableValue>> {
+            {
+              std::lock_guard<std::mutex> lock(state_mutex_);
+              silence_event_sink_.reset();
+              silence_listener_active_ = false;
+            }
+            SyncCaptureState(eRender);
+            return nullptr;
+          });
+  silence_event_channel_->SetStreamHandler(std::move(silence_stream_handler));
+
   RegisterDeviceNotifications();
 }
 
@@ -489,9 +519,11 @@ SystemAudioMeterPlugin::~SystemAudioMeterPlugin() {
     input_requested_running_ = false;
     output_listener_active_ = false;
     input_listener_active_ = false;
+    silence_listener_active_ = false;
     output_event_sink_.reset();
     input_event_sink_.reset();
     device_event_sink_.reset();
+    silence_event_sink_.reset();
   }
   SyncCaptureState(eRender);
   SyncCaptureState(eCapture);
@@ -827,6 +859,87 @@ void SystemAudioMeterPlugin::HandleMethodCall(
     return;
   }
 
+  if (method == "enableSilenceDetection") {
+    EDataFlow flow = eRender;
+    double threshold = -1.0;
+    int64_t duration_ms = 0;
+    if (const auto* arguments = std::get_if<EncodableMap>(method_call.arguments())) {
+      const auto flow_it = arguments->find(EncodableValue("flow"));
+      if (flow_it != arguments->end()) {
+        if (const auto* value = std::get_if<std::string>(&flow_it->second)) {
+          flow = *value == "input" ? eCapture : eRender;
+        }
+      }
+
+      const auto threshold_it = arguments->find(EncodableValue("threshold"));
+      if (threshold_it != arguments->end()) {
+        if (const auto* value = std::get_if<double>(&threshold_it->second)) {
+          threshold = *value;
+        } else if (const auto* value = std::get_if<int32_t>(&threshold_it->second)) {
+          threshold = static_cast<double>(*value);
+        } else if (const auto* value = std::get_if<int64_t>(&threshold_it->second)) {
+          threshold = static_cast<double>(*value);
+        }
+      }
+
+      const auto duration_it = arguments->find(EncodableValue("durationMs"));
+      if (duration_it != arguments->end()) {
+        if (const auto* value = std::get_if<int32_t>(&duration_it->second)) {
+          duration_ms = *value;
+        } else if (const auto* value = std::get_if<int64_t>(&duration_it->second)) {
+          duration_ms = *value;
+        } else if (const auto* value = std::get_if<double>(&duration_it->second)) {
+          duration_ms = static_cast<int64_t>(*value);
+        }
+      }
+    }
+
+    if (!std::isfinite(threshold) || threshold < 0.0 || threshold > 1.0) {
+      result->Error("invalid_silence_threshold",
+                    "Silence detection threshold must be a finite value between 0.0 and 1.0.",
+                    EncodableValue());
+      return;
+    }
+    if (duration_ms <= 0) {
+      result->Error("invalid_silence_duration",
+                    "Silence detection duration must be greater than 0 milliseconds.",
+                    EncodableValue());
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      auto& state =
+          flow == eCapture ? input_silence_detection_state_
+                           : output_silence_detection_state_;
+      state.enabled = true;
+      state.threshold = threshold;
+      state.duration = std::chrono::milliseconds(duration_ms);
+      state.is_silent = false;
+      state.has_candidate = false;
+      state.candidate_started_at = std::chrono::steady_clock::time_point{};
+    }
+    SyncCaptureState(flow);
+    result->Success();
+    return;
+  }
+
+  if (method == "disableSilenceDetection") {
+    EDataFlow flow = eRender;
+    if (const auto* arguments = std::get_if<EncodableMap>(method_call.arguments())) {
+      const auto flow_it = arguments->find(EncodableValue("flow"));
+      if (flow_it != arguments->end()) {
+        if (const auto* value = std::get_if<std::string>(&flow_it->second)) {
+          flow = *value == "input" ? eCapture : eRender;
+        }
+      }
+    }
+    ResetSilenceDetectionState(flow, false);
+    SyncCaptureState(flow);
+    result->Success();
+    return;
+  }
+
   if (method == "isRunning") {
     result->Success(EncodableValue(output_capture_active_.load()));
     return;
@@ -850,13 +963,19 @@ void SystemAudioMeterPlugin::SyncCaptureState(EDataFlow flow, bool force_restart
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (flow == eCapture) {
-      should_run = input_requested_running_ && input_listener_active_;
+      should_run = input_requested_running_ &&
+                   (input_listener_active_ ||
+                    (silence_listener_active_ &&
+                     input_silence_detection_state_.enabled));
       selected_device_id = selected_input_device_id_;
       stop_requested = &input_stop_requested_;
       capture_active = &input_capture_active_;
       capture_thread = &input_capture_thread_;
     } else {
-      should_run = output_requested_running_ && output_listener_active_;
+      should_run = output_requested_running_ &&
+                   (output_listener_active_ ||
+                    (silence_listener_active_ &&
+                     output_silence_detection_state_.enabled));
       selected_device_id = selected_output_device_id_;
       stop_requested = &output_stop_requested_;
       capture_active = &output_capture_active_;
@@ -874,6 +993,7 @@ void SystemAudioMeterPlugin::SyncCaptureState(EDataFlow flow, bool force_restart
   }
 
   if (!should_run) {
+    ResetSilenceDetectionState(flow, true);
     return;
   }
 
@@ -1025,6 +1145,7 @@ void SystemAudioMeterPlugin::CaptureLoop(EDataFlow flow,
     HRESULT packet_result = capture_client->GetNextPacketSize(&packet_length);
     if (FAILED(packet_result)) {
       EmitLevels(flow, 0.0, 0.0, device_info.id, device_info.name);
+      ResetSilenceDetectionState(flow, true);
       ClearCurrentDevice(flow);
       EmitDeviceEvent(flow, "disconnected", device_info.id, device_info.name,
                       device_info.is_default, !selected_device_id.empty());
@@ -1042,6 +1163,7 @@ void SystemAudioMeterPlugin::CaptureLoop(EDataFlow flow,
           capture_client->GetBuffer(&data, &num_frames, &flags, nullptr, nullptr);
       if (FAILED(buffer_result)) {
         EmitLevels(flow, 0.0, 0.0, device_info.id, device_info.name);
+        ResetSilenceDetectionState(flow, true);
         ClearCurrentDevice(flow);
         EmitDeviceEvent(flow, "disconnected", device_info.id, device_info.name,
                         device_info.is_default, !selected_device_id.empty());
@@ -1064,6 +1186,7 @@ void SystemAudioMeterPlugin::CaptureLoop(EDataFlow flow,
 
       if (FAILED(capture_client->GetNextPacketSize(&packet_length))) {
         EmitLevels(flow, 0.0, 0.0, device_info.id, device_info.name);
+        ResetSilenceDetectionState(flow, true);
         ClearCurrentDevice(flow);
         EmitDeviceEvent(flow, "disconnected", device_info.id, device_info.name,
                         device_info.is_default, !selected_device_id.empty());
@@ -1079,6 +1202,8 @@ void SystemAudioMeterPlugin::CaptureLoop(EDataFlow flow,
         now - last_emit_at >= kEmitInterval) {
       EmitLevels(flow, pending_left_peak, pending_right_peak, device_info.id,
                  device_info.name);
+      ProcessSilenceDetection(flow, (std::max)(pending_left_peak, pending_right_peak), now,
+                              device_info.id, device_info.name);
       pending_left_peak = 0.0;
       pending_right_peak = 0.0;
       last_emit_at = now;
@@ -1092,6 +1217,7 @@ void SystemAudioMeterPlugin::CaptureLoop(EDataFlow flow,
   audio_client->Stop();
   capture_active.store(false);
   if (!device_lost) {
+    ResetSilenceDetectionState(flow, true);
     ClearCurrentDevice(flow);
   }
 }
@@ -1147,6 +1273,82 @@ void SystemAudioMeterPlugin::EmitDeviceEvent(
       {EncodableValue("isSelected"), EncodableValue(is_selected)},
   };
   device_event_sink_->Success(EncodableValue(event));
+}
+
+void SystemAudioMeterPlugin::ProcessSilenceDetection(
+    EDataFlow flow, double peak_level, std::chrono::steady_clock::time_point now,
+    const std::string& device_id, const std::string& device_name) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  auto& state =
+      flow == eCapture ? input_silence_detection_state_
+                       : output_silence_detection_state_;
+  if (!state.enabled) {
+    return;
+  }
+
+  const double clamped_peak = ClampPeak(peak_level);
+  std::string event_type;
+
+  if (clamped_peak < state.threshold) {
+    if (state.is_silent) {
+      return;
+    }
+    if (!state.has_candidate) {
+      state.candidate_started_at = now;
+      state.has_candidate = true;
+      return;
+    }
+    if (now - state.candidate_started_at < state.duration) {
+      return;
+    }
+
+    state.is_silent = true;
+    state.has_candidate = false;
+    state.candidate_started_at = std::chrono::steady_clock::time_point{};
+    event_type = "silenceStarted";
+  } else {
+    state.has_candidate = false;
+    state.candidate_started_at = std::chrono::steady_clock::time_point{};
+    if (!state.is_silent) {
+      return;
+    }
+    state.is_silent = false;
+    event_type = "silenceEnded";
+  }
+
+  if (!silence_event_sink_) {
+    return;
+  }
+
+  const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now().time_since_epoch())
+                             .count();
+  EncodableMap event{
+      {EncodableValue("type"), EncodableValue(event_type)},
+      {EncodableValue("flow"),
+       EncodableValue(flow == eCapture ? "input" : "output")},
+      {EncodableValue("peakLevel"), EncodableValue(clamped_peak)},
+      {EncodableValue("timestamp"), EncodableValue(static_cast<int64_t>(timestamp))},
+      {EncodableValue("deviceId"), EncodableValue(device_id)},
+      {EncodableValue("deviceName"), EncodableValue(device_name)},
+  };
+  silence_event_sink_->Success(EncodableValue(event));
+}
+
+void SystemAudioMeterPlugin::ResetSilenceDetectionState(
+    EDataFlow flow, bool preserve_configuration) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  auto& state =
+      flow == eCapture ? input_silence_detection_state_
+                       : output_silence_detection_state_;
+  state.is_silent = false;
+  state.has_candidate = false;
+  state.candidate_started_at = std::chrono::steady_clock::time_point{};
+  if (!preserve_configuration) {
+    state.enabled = false;
+    state.threshold = 0.0;
+    state.duration = std::chrono::milliseconds(0);
+  }
 }
 
 void SystemAudioMeterPlugin::EmitError(EDataFlow flow, const std::string& code,

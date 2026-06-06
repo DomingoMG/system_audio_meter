@@ -1,3 +1,11 @@
+## 0.4.0
+
+- Added optional silence detection for system output with configurable threshold and minimum duration.
+- Added the `silenceEvents` stream plus the `AudioSilenceEvent` and `AudioSilenceEventType` Dart models.
+- Added `enableSilenceDetection()` and `disableSilenceDetection()` to the public API.
+- Integrated silence event emission into the Windows and macOS native metering pipelines without storing audio buffers.
+- Updated the example app and README to demonstrate silence detection.
+
 ## 0.3.1
 
 - Improved the README for pub.dev and pointed users to the official documentation website.

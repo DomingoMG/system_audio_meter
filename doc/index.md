@@ -7,6 +7,7 @@ It exposes normalized stereo peak levels for:
 - system output audio
 - microphone and other input devices
 - device connection and disconnection events
+- optional silence transition events for input and output
 
 The plugin is designed for **desktop visualization**, not audio production tooling. It processes audio in memory only, emits lightweight metering values to Flutter, and releases native buffers immediately after each calculation pass.
 
@@ -16,6 +17,7 @@ The plugin is designed for **desktop visualization**, not audio production tooli
 - Output device enumeration and selection
 - Input device enumeration and selection
 - Device lifecycle events for reconnect-aware UIs
+- Optional per-flow silence detection with configurable threshold and duration
 - Native Windows backend using WASAPI
 - Native macOS backend using Core Audio taps for output and CoreAudio capture for input
 

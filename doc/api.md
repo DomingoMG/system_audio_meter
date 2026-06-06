@@ -16,9 +16,11 @@ final meter = SystemAudioMeter.instance;
 abstract class SystemAudioMeter {
   static SystemAudioMeter get instance;
 
+  Stream<AudioLevels> get outputLevels;
   Stream<AudioLevels> get levels;
   Stream<AudioLevels> get inputLevels;
   Stream<AudioDeviceEvent> get deviceEvents;
+  Stream<AudioSilenceEvent> get silenceEvents;
 
   Future<List<AudioOutputDevice>> getOutputDevices();
   Future<List<AudioInputDevice>> getInputDevices();
@@ -35,6 +37,16 @@ abstract class SystemAudioMeter {
   Future<void> stop();
   Future<void> stopInput();
 
+  Future<void> enableSilenceDetection({
+    required AudioDeviceFlow flow,
+    required double threshold,
+    required Duration duration,
+  });
+
+  Future<void> disableSilenceDetection({
+    required AudioDeviceFlow flow,
+  });
+
   Future<bool> get isRunning;
   Future<bool> get isInputRunning;
 }
@@ -42,16 +54,20 @@ abstract class SystemAudioMeter {
 
 ## Streams
 
-### `levels`
+### `outputLevels`
 
 Output stereo meter stream.
 
 ```dart
-meter.levels.listen((AudioLevels levels) {
+meter.outputLevels.listen((AudioLevels levels) {
   print(levels.leftPeak);
   print(levels.rightPeak);
 });
 ```
+
+### `levels`
+
+Backward-compatible alias for `outputLevels`.
 
 ### `inputLevels`
 
@@ -70,6 +86,16 @@ Connection and disconnection stream for device-aware UIs.
 ```dart
 meter.deviceEvents.listen((AudioDeviceEvent event) {
   print('${event.flow} ${event.kind}');
+});
+```
+
+### `silenceEvents`
+
+Optional output-silence transition stream.
+
+```dart
+meter.silenceEvents.listen((AudioSilenceEvent event) {
+  print('${event.flow} ${event.type} at ${event.peakLevel}');
 });
 ```
 
@@ -124,6 +150,65 @@ await meter.stopInput();
 ```dart
 final outputRunning = await meter.isRunning;
 final inputRunning = await meter.isInputRunning;
+```
+
+## Silence detection
+
+Enable silence detection for system output:
+
+```dart
+await meter.enableSilenceDetection(
+  flow: AudioDeviceFlow.output,
+  threshold: 0.05,
+  duration: const Duration(milliseconds: 800),
+);
+
+await meter.enableSilenceDetection(
+  flow: AudioDeviceFlow.input,
+  threshold: 0.05,
+  duration: const Duration(milliseconds: 800),
+);
+```
+
+Disable it again when no longer needed:
+
+```dart
+await meter.disableSilenceDetection(flow: AudioDeviceFlow.output);
+await meter.disableSilenceDetection(flow: AudioDeviceFlow.input);
+```
+
+## Silence stage tracking
+
+For UI-level severity escalation, use `AudioSilenceTracker` on top of the native silence events:
+
+```dart
+final tracker = meter.createSilenceTracker(
+  stages: const <AudioSilenceStage>[
+    AudioSilenceStage(
+      id: 'warning',
+      after: Duration(seconds: 5),
+      severity: 'warning',
+      label: 'Warning',
+    ),
+    AudioSilenceStage(
+      id: 'critical',
+      after: Duration(seconds: 10),
+      severity: 'critical',
+      label: 'Critical',
+    ),
+  ],
+);
+```
+
+Listen for derived state changes:
+
+```dart
+tracker.states.listen((AudioSilenceState state) {
+  print(state.flow);
+  print(state.type);
+  print(state.silentFor);
+  print(state.currentStage?.severity);
+});
 ```
 
 ## Data models
@@ -191,6 +276,58 @@ class AudioDeviceEvent {
   final String? deviceName;
   final bool isDefault;
   final bool isSelected;
+}
+```
+
+### `AudioSilenceEvent`
+
+```dart
+enum AudioSilenceEventType {
+  silenceStarted,
+  silenceEnded,
+}
+
+class AudioSilenceEvent {
+  final AudioSilenceEventType type;
+  final AudioDeviceFlow flow;
+  final double peakLevel;
+  final DateTime timestamp;
+  final String? deviceId;
+  final String? deviceName;
+}
+```
+
+### `AudioSilenceStage`
+
+```dart
+class AudioSilenceStage {
+  final String id;
+  final Duration after;
+  final String? severity;
+  final String? label;
+}
+```
+
+### `AudioSilenceState`
+
+```dart
+enum AudioSilenceStateType {
+  active,
+  silent,
+  stageChanged,
+}
+
+class AudioSilenceState {
+  final AudioSilenceStateType type;
+  final AudioDeviceFlow flow;
+  final bool isSilent;
+  final Duration silentFor;
+  final DateTime updatedAt;
+  final AudioSilenceStage? currentStage;
+  final String? deviceId;
+  final String? deviceName;
+  final double peakLevel;
+  final AudioSilenceEventType? sourceEventType;
 }
 ```
 

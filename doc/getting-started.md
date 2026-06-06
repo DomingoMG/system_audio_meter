@@ -47,7 +47,7 @@ class _OutputMeterExampleState extends State<OutputMeterExample> {
   @override
   void initState() {
     super.initState();
-    subscription = meter.levels.listen((levels) {
+    subscription = meter.outputLevels.listen((levels) {
       setState(() {
         left = levels.leftPeak;
         right = levels.rightPeak;

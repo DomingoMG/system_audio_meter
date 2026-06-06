@@ -4,7 +4,7 @@
 
 A Flutter desktop plugin for real-time system audio metering on Windows and macOS.
 
-`system_audio_meter` captures live peak levels from the operating system audio pipeline and exposes them to Flutter through streams that are easy to bind to VU meters, peak bars, diagnostics overlays, and device-monitoring UIs.
+`system_audio_meter` captures live peak levels from the operating system audio pipeline and exposes them to Flutter through explicit `outputLevels` and `inputLevels` streams that are easy to bind to VU meters, peak bars, diagnostics overlays, and device-monitoring UIs.
 
 ## Official documentation
 
@@ -25,6 +25,7 @@ Use the documentation site for:
 
 - Real-time output metering for desktop audio
 - Real-time input metering for microphones and other capture devices
+- Optional silence detection for input and output using configurable threshold and duration
 - Output and input device enumeration
 - Device selection and default-device fallback
 - Device connection and disconnection events
@@ -55,7 +56,7 @@ Add the dependency:
 
 ```yaml
 dependencies:
-  system_audio_meter: ^0.3.1
+  system_audio_meter: ^0.4.0
 ```
 
 Or use:
@@ -69,7 +70,7 @@ flutter pub add system_audio_meter
 ```dart
 final meter = SystemAudioMeter.instance;
 
-final outputSubscription = meter.levels.listen((AudioLevels levels) {
+final outputSubscription = meter.outputLevels.listen((AudioLevels levels) {
   print('Output L: ${levels.leftPeak}, R: ${levels.rightPeak}');
 });
 
@@ -88,6 +89,85 @@ await SystemAudioMeter.instance.stop();
 await SystemAudioMeter.instance.stopInput();
 await outputSubscription.cancel();
 await inputSubscription.cancel();
+```
+
+## Silence detection
+
+Silence detection is optional and disabled by default. It evaluates the already computed peak level in the native layer and emits per-flow events only when silence is confirmed for the configured duration.
+
+```dart
+final meter = SystemAudioMeter.instance;
+
+final silenceSubscription =
+    meter.silenceEvents.listen((AudioSilenceEvent event) {
+  print('${event.flow} ${event.type} at ${event.peakLevel}');
+});
+
+await meter.enableSilenceDetection(
+  flow: AudioDeviceFlow.output,
+  threshold: 0.05,
+  duration: const Duration(milliseconds: 800),
+);
+
+await meter.enableSilenceDetection(
+  flow: AudioDeviceFlow.input,
+  threshold: 0.05,
+  duration: const Duration(milliseconds: 800),
+);
+
+await meter.start();
+await meter.startInput();
+```
+
+Disable it when it is no longer needed:
+
+```dart
+await meter.disableSilenceDetection(flow: AudioDeviceFlow.output);
+await meter.disableSilenceDetection(flow: AudioDeviceFlow.input);
+await silenceSubscription.cancel();
+```
+
+## UI-driven silence stages
+
+The recommended approach is:
+
+- keep silence start/end detection in the native layer
+- build warning or severity escalation in Dart/UI
+
+The package includes `AudioSilenceTracker` for that purpose:
+
+```dart
+final tracker = meter.createSilenceTracker(
+  stages: const <AudioSilenceStage>[
+    AudioSilenceStage(
+      id: 'warning',
+      after: Duration(seconds: 5),
+      severity: 'warning',
+      label: 'Warning',
+    ),
+    AudioSilenceStage(
+      id: 'critical',
+      after: Duration(seconds: 10),
+      severity: 'critical',
+      label: 'Critical',
+    ),
+  ],
+);
+
+final trackerSubscription = tracker.states.listen((AudioSilenceState state) {
+  print('${state.flow} ${state.type} ${state.currentStage?.id}');
+});
+```
+
+This keeps the UI fully configurable without changing native code whenever your escalation rules change.
+
+Silence events are emitted as strongly typed Dart models:
+
+```dart
+enum AudioSilenceEventType {
+  silenceStarted,
+  silenceEnded,
+}
 ```
 
 ## Screenshots
