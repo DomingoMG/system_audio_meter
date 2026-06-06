@@ -94,11 +94,11 @@ await inputSubscription.cancel();
 
 ### Windows
 
-![System Audio Meter on Windows](screenshots/screenshot_windows.jpeg)
+![System Audio Meter on Windows](doc/assets/images/screenshot_windows.jpeg)
 
 ### macOS
 
-![System Audio Meter on macOS](screenshots/screenshot_macos.png)
+![System Audio Meter on macOS](doc/assets/images/screenshot_macos.png)
 
 ## macOS host app requirements
 

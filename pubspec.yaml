@@ -29,9 +29,9 @@ topics:
 
 screenshots:
   - description: Example app showing real-time stereo peak meters plus input and output device handling on Windows.
-    path: screenshots/screenshot_windows.jpeg
+    path: doc/assets/images/screenshot_windows.jpeg
   - description: Example app showing real-time stereo peak meters plus input and output device handling on macOS.
-    path: screenshots/screenshot_macos.png
+    path: doc/assets/images/screenshot_macos.png
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
