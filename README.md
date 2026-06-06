@@ -1,8 +1,25 @@
 # system_audio_meter
 
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-0A7EA4)](https://domingomg.github.io/system_audio_meter/)
+
 A desktop-only Flutter plugin for visualizing real-time desktop audio levels.
 
 It exposes normalized stereo peak values through `EventChannel`s, reports device connection lifecycle events, keeps processing in memory only, and is designed for lightweight UI meters rather than recording or audio analysis pipelines.
+
+## Documentation
+
+The full documentation website is available on GitHub Pages:
+
+- [system_audio_meter documentation](https://domingomg.github.io/system_audio_meter/)
+
+Documentation includes:
+
+- installation and platform setup
+- API reference
+- architecture and Mermaid diagrams
+- performance and memory behavior
+- FAQ and troubleshooting
+- roadmap and platform limitations
 
 ## Screenshots
 
