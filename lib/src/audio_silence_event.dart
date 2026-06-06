@@ -1,10 +1,19 @@
 import 'audio_device_event.dart';
 
+/// Native silence transition type emitted by the plugin.
 enum AudioSilenceEventType {
+  /// The monitored flow remained below the configured threshold long enough to
+  /// be considered silent.
   silenceStarted,
+
+  /// The monitored flow rose above the configured threshold after being silent.
   silenceEnded,
 }
 
+/// Immutable low-level silence event emitted by [SystemAudioMeter.silenceEvents].
+///
+/// This event intentionally carries only the native transition information.
+/// Richer UI-oriented escalation can be built in Dart with [AudioSilenceTracker].
 class AudioSilenceEvent {
   const AudioSilenceEvent({
     required this.type,
@@ -15,13 +24,25 @@ class AudioSilenceEvent {
     this.deviceName,
   });
 
+  /// Type of silence transition that occurred.
   final AudioSilenceEventType type;
+
+  /// Flow that triggered the silence transition.
   final AudioDeviceFlow flow;
+
+  /// Peak level associated with the transition, normalized to `0.0..1.0`.
   final double peakLevel;
+
+  /// Event timestamp parsed from the platform payload.
   final DateTime timestamp;
+
+  /// Device identifier associated with the event, when available.
   final String? deviceId;
+
+  /// Human-readable device name associated with the event, when available.
   final String? deviceName;
 
+  /// Parses a platform channel payload into an [AudioSilenceEvent].
   factory AudioSilenceEvent.fromMap(Map<dynamic, dynamic> map) {
     return AudioSilenceEvent(
       type: _parseType(map['type']),

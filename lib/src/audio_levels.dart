@@ -1,3 +1,6 @@
+/// Immutable peak meter update emitted by the plugin.
+///
+/// Peak values are normalized to the `0.0..1.0` range before they reach Dart.
 class AudioLevels {
   const AudioLevels({
     required this.leftPeak,
@@ -9,14 +12,28 @@ class AudioLevels {
     this.inputDeviceName,
   });
 
+  /// Peak value for the left channel, normalized to `0.0..1.0`.
   final double leftPeak;
+
+  /// Peak value for the right channel, normalized to `0.0..1.0`.
   final double rightPeak;
+
+  /// Event timestamp parsed from the platform payload.
   final DateTime timestamp;
+
+  /// Output device identifier when this event comes from output metering.
   final String? outputDeviceId;
+
+  /// Output device name when this event comes from output metering.
   final String? outputDeviceName;
+
+  /// Input device identifier when this event comes from input metering.
   final String? inputDeviceId;
+
+  /// Input device name when this event comes from input metering.
   final String? inputDeviceName;
 
+  /// Parses a platform channel payload into an [AudioLevels] instance.
   factory AudioLevels.fromMap(Map<dynamic, dynamic> map) {
     return AudioLevels(
       leftPeak: _clampPeak(map['leftPeak']),

@@ -13,22 +13,31 @@ import 'src/audio_silence_tracker.dart';
 import 'system_audio_meter_platform_interface.dart';
 
 /// An implementation of [SystemAudioMeterPlatform] that uses method channels.
+///
+/// This class is the default runtime backend used by Flutter code. Forks that
+/// add new desktop platforms can use it as a reference for channel naming,
+/// payload shapes, and Dart-side parsing conventions.
 class MethodChannelSystemAudioMeter extends SystemAudioMeterPlatform {
+  /// Method channel used for command-style requests.
   @visibleForTesting
   final MethodChannel methodChannel = const MethodChannel('system_audio_meter');
 
+  /// Event channel used for output peak updates.
   @visibleForTesting
   final EventChannel eventChannel =
       const EventChannel('system_audio_meter/levels');
 
+  /// Event channel used for input peak updates.
   @visibleForTesting
   final EventChannel inputEventChannel =
       const EventChannel('system_audio_meter/input_levels');
 
+  /// Event channel used for device lifecycle events.
   @visibleForTesting
   final EventChannel deviceEventChannel =
       const EventChannel('system_audio_meter/device_events');
 
+  /// Event channel used for low-level silence transition events.
   @visibleForTesting
   final EventChannel silenceEventChannel =
       const EventChannel('system_audio_meter/silence_events');

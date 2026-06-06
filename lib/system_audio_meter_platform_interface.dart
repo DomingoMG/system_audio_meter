@@ -32,6 +32,7 @@ abstract class SystemAudioMeterPlatform extends PlatformInterface
       throw UnimplementedError('outputLevels has not been implemented.');
 
   @override
+  /// Backward-compatible alias for [outputLevels].
   Stream<AudioLevels> get levels =>
       outputLevels;
 
@@ -117,6 +118,7 @@ abstract class SystemAudioMeterPlatform extends PlatformInterface
       throw UnimplementedError('isInputRunning has not been implemented.');
 
   @override
+  /// Creates a tracker that derives silence stages in Dart from [silenceEvents].
   AudioSilenceTracker createSilenceTracker({
     required List<AudioSilenceStage> stages,
   }) {

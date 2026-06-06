@@ -5,7 +5,19 @@ import 'audio_silence_event.dart';
 import 'audio_silence_stage.dart';
 import 'audio_silence_state.dart';
 
+/// Tracks silence progression in Dart on top of low-level native silence events.
+///
+/// The native plugin reports only when a flow enters or exits silence.
+/// [AudioSilenceTracker] adds application-defined escalation stages such as
+/// "warning after 5 seconds" and "critical after 10 seconds".
+///
+/// This keeps platform code simple while letting applications and forks evolve
+/// their UI policy independently.
 class AudioSilenceTracker {
+  /// Creates a tracker from a stream of native [AudioSilenceEvent] values.
+  ///
+  /// The [stages] list is sorted by [AudioSilenceStage.after]. Any stage with a
+  /// non-positive duration is ignored.
   AudioSilenceTracker({
     required Stream<AudioSilenceEvent> events,
     required List<AudioSilenceStage> stages,
@@ -28,8 +40,13 @@ class AudioSilenceTracker {
 
   late final StreamSubscription<AudioSilenceEvent> _subscription;
 
+  /// Broadcast stream of derived silence states.
   Stream<AudioSilenceState> get states => _controller.stream;
 
+  /// Resets the tracker state for a single [flow].
+  ///
+  /// This is useful when the host application deliberately stops metering or
+  /// switches screens and does not want pending stage timers to keep firing.
   void reset({
     required AudioDeviceFlow flow,
     bool emitState = true,
@@ -64,12 +81,14 @@ class AudioSilenceTracker {
     );
   }
 
+  /// Resets every tracked flow.
   void resetAll({bool emitState = true}) {
     for (final flow in _states.keys) {
       reset(flow: flow, emitState: emitState);
     }
   }
 
+  /// Cancels subscriptions and internal timers owned by this tracker.
   void dispose() {
     _subscription.cancel();
     for (final state in _states.values) {
