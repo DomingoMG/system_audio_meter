@@ -1,3 +1,13 @@
+## 0.4.1
+
+- Refactored the example application into smaller reusable widgets and pages.
+- Extracted meter-related UI components from `main.dart` into dedicated widgets.
+- Added `MeterSection`, `PeakMeter`, `DeviceOption`, `ErrorCard`, and `SilenceStatusCard`.
+- Introduced a dedicated `MeterPage` to improve separation of concerns.
+- Improved maintainability, readability, and future extensibility of the example application.
+- No changes to the public API.
+- No functional changes to audio metering or silence detection.
+
 ## 0.4.0
 
 - Added optional silence detection for system output with configurable threshold and minimum duration.

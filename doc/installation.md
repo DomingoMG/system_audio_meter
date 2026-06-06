@@ -6,7 +6,7 @@ This page covers package installation and platform-specific setup requirements.
 
 ```yaml
 dependencies:
-  system_audio_meter: ^0.3.0
+  system_audio_meter: ^0.4.1
 ```
 
 Then:
